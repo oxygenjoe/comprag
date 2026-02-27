@@ -1,0 +1,187 @@
+# CUMRAG Model Registry
+# All models in GGUF format from HuggingFace (bartowski or official quants)
+# Reference: cumrag-spec.md Model Matrix
+
+models:
+  qwen2.5-14b-instruct:
+    display_name: "Qwen 2.5 14B Instruct"
+    parameters: 14B
+    hf_repo: "bartowski/Qwen2.5-14B-Instruct-GGUF"
+    quantizations:
+      Q4_K_M:
+        filename: "Qwen2.5-14B-Instruct-Q4_K_M.gguf"
+        size_gb: 8.9
+      Q8_0:
+        filename: "Qwen2.5-14B-Instruct-Q8_0.gguf"
+        size_gb: 15.7
+      FP16:
+        filename: "Qwen2.5-14B-Instruct-f16.gguf"
+        size_gb: 29.5
+    priority: HIGH
+    feasibility:
+      v100: "All quantizations including FP16"
+      mi25: "Q4 (tight)"
+      1660s: "No — too large"
+      fpga: "No"
+      cpu: "Q4 if patient"
+      optane: "Q4 if patient"
+
+  phi-4-14b:
+    display_name: "Phi-4 14B"
+    parameters: 14B
+    hf_repo: "bartowski/phi-4-GGUF"
+    quantizations:
+      Q4_K_M:
+        filename: "phi-4-Q4_K_M.gguf"
+        size_gb: 8.4
+      Q8_0:
+        filename: "phi-4-Q8_0.gguf"
+        size_gb: 14.8
+      FP16:
+        filename: "phi-4-f16.gguf"
+        size_gb: 27.8
+    priority: HIGH
+    feasibility:
+      v100: "All quantizations including FP16"
+      mi25: "Q4 (tight)"
+      1660s: "No — too large"
+      fpga: "No"
+      cpu: "Q4 if patient"
+      optane: "Q4 if patient"
+
+  mistral-nemo-12b-instruct:
+    display_name: "Mistral NeMo 12B Instruct"
+    parameters: 12B
+    hf_repo: "bartowski/Mistral-Nemo-Instruct-2407-GGUF"
+    quantizations:
+      Q4_K_M:
+        filename: "Mistral-Nemo-Instruct-2407-Q4_K_M.gguf"
+        size_gb: 7.4
+      Q8_0:
+        filename: "Mistral-Nemo-Instruct-2407-Q8_0.gguf"
+        size_gb: 13.0
+    priority: HIGH
+    feasibility:
+      v100: "All quantizations"
+      mi25: "Q4 and Q8"
+      1660s: "No — too large"
+      fpga: "No"
+      cpu: "Q4 if patient"
+      optane: "Q4 if patient"
+
+  llama-3.1-8b-instruct:
+    display_name: "Llama 3.1 8B Instruct"
+    parameters: 8B
+    hf_repo: "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF"
+    quantizations:
+      Q4_K_M:
+        filename: "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+        size_gb: 4.9
+      Q8_0:
+        filename: "Meta-Llama-3.1-8B-Instruct-Q8_0.gguf"
+        size_gb: 8.5
+      FP16:
+        filename: "Meta-Llama-3.1-8B-Instruct-f16.gguf"
+        size_gb: 16.1
+    priority: "HIGH (baseline)"
+    feasibility:
+      v100: "All quantizations including FP16"
+      mi25: "Q4 and Q8"
+      1660s: "Q4 (very tight, may OOM)"
+      fpga: "No"
+      cpu: "Q4 primary"
+      optane: "Q4 primary"
+
+  qwen2.5-7b-instruct:
+    display_name: "Qwen 2.5 7B Instruct"
+    parameters: 7B
+    hf_repo: "bartowski/Qwen2.5-7B-Instruct-GGUF"
+    quantizations:
+      Q4_K_M:
+        filename: "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+        size_gb: 4.7
+      Q8_0:
+        filename: "Qwen2.5-7B-Instruct-Q8_0.gguf"
+        size_gb: 8.1
+    priority: MEDIUM
+    feasibility:
+      v100: "All quantizations"
+      mi25: "Q4 and Q8"
+      1660s: "Q4 (very tight, may OOM)"
+      fpga: "No"
+      cpu: "Q4 primary"
+      optane: "Q4 primary"
+
+  gemma-2-9b-instruct:
+    display_name: "Gemma 2 9B Instruct"
+    parameters: 9B
+    hf_repo: "bartowski/gemma-2-9b-it-GGUF"
+    quantizations:
+      Q4_K_M:
+        filename: "gemma-2-9b-it-Q4_K_M.gguf"
+        size_gb: 5.8
+      Q8_0:
+        filename: "gemma-2-9b-it-Q8_0.gguf"
+        size_gb: 10.1
+    priority: MEDIUM
+    feasibility:
+      v100: "All quantizations"
+      mi25: "Q4 and Q8"
+      1660s: "Q4 (tight)"
+      fpga: "No"
+      cpu: "Q4 primary"
+      optane: "Q4 primary"
+
+  glm-4-9b-chat:
+    display_name: "GLM-4 9B Chat"
+    parameters: 9B
+    hf_repo: "bartowski/glm-4-9b-chat-GGUF"
+    quantizations:
+      Q4_K_M:
+        filename: "glm-4-9b-chat-Q4_K_M.gguf"
+        size_gb: 5.5
+    priority: MEDIUM
+    feasibility:
+      v100: "Q4"
+      mi25: "Q4"
+      1660s: "Q4 (tight)"
+      fpga: "No"
+      cpu: "Q4"
+      optane: "Q4"
+
+  smollm2-1.7b-instruct:
+    display_name: "SmolLM2 1.7B Instruct"
+    parameters: 1.7B
+    hf_repo: "bartowski/SmolLM2-1.7B-Instruct-GGUF"
+    quantizations:
+      Q8_0:
+        filename: "SmolLM2-1.7B-Instruct-Q8_0.gguf"
+        size_gb: 1.8
+      FP16:
+        filename: "SmolLM2-1.7B-Instruct-f16.gguf"
+        size_gb: 3.4
+    priority: "LOW (floor test)"
+    feasibility:
+      v100: "All quantizations"
+      mi25: "All quantizations"
+      1660s: "All quantizations"
+      fpga: "No"
+      cpu: "All quantizations"
+      optane: "All quantizations"
+
+  bitnet-1.58b:
+    display_name: "BitNet 1.58b (TBD model)"
+    parameters: 3B
+    hf_repo: "TBD"
+    quantizations:
+      1.58-bit:
+        filename: "TBD"
+        size_gb: 0.5
+    priority: "LOW (FPGA only)"
+    feasibility:
+      v100: "No — requires BitNet runtime"
+      mi25: "No — requires BitNet runtime"
+      1660s: "No — requires BitNet runtime"
+      fpga: "1.58-bit native"
+      cpu: "No — requires BitNet runtime"
+      optane: "No — requires BitNet runtime"
