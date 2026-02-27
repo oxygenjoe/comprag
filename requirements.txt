@@ -1,0 +1,14 @@
+numpy
+scipy
+pandas
+matplotlib
+seaborn
+chromadb
+sentence-transformers
+ragas
+langchain
+langchain-community
+huggingface_hub
+requests
+pyyaml
+tqdm
