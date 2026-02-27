@@ -23,7 +23,7 @@ retrieval:
   embedding_dim: 384
   vector_store: "chromadb"
   index_path: "index/"
-  chunk_size: 512
+  chunk_size: 300  # Whitespace words, not BPE tokens. 300 words ≈ 400-500 BPE tokens.
   overlap: 64
   top_k: 5
 

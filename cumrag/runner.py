@@ -18,6 +18,7 @@ CLI:
 
 import argparse
 import json
+import signal
 import sys
 import time
 import traceback
@@ -344,6 +345,19 @@ class EvalRunner:
             self._template = load_prompt_template(self._prompt_template_path)
         return self._template
 
+    # --- Model metadata ---
+
+    def _get_model_context_length(self, model_name: str) -> int:
+        """Look up model context length from models.yaml. Default 4096 if unknown."""
+        try:
+            models_config = load_config("models")
+            for key, model_def in models_config.get("models", {}).items():
+                if model_def.get("display_name") == model_name or key == model_name:
+                    return model_def.get("context_length", 4096)
+        except (FileNotFoundError, KeyError):
+            pass
+        return 4096
+
     # --- Server lifecycle ---
 
     def _start_server(
@@ -481,6 +495,17 @@ class EvalRunner:
             # 2. Format prompt using locked template
             template = self._get_template()
             prompt = format_prompt(template, query, chunks)
+
+            # Context window safety check
+            estimated_tokens = int(len(prompt.split()) * 1.4)
+            model_ctx = self._get_model_context_length(model_name)
+            if estimated_tokens > 0.9 * model_ctx:
+                logger.warning(
+                    "Estimated prompt (%d tokens) may exceed model context "
+                    "(%d tokens). Consider reducing top_k.",
+                    estimated_tokens,
+                    model_ctx,
+                )
 
             # 3. Generate response with metrics
             if self._server is None:
@@ -662,6 +687,19 @@ class EvalRunner:
             self._server = LlamaServer(server_url=self._server_url)
             self._server.load_generation_params()
 
+        # Register signal handlers to ensure server cleanup on SIGTERM/SIGINT
+        _original_sigterm = signal.getsignal(signal.SIGTERM)
+        _original_sigint = signal.getsignal(signal.SIGINT)
+
+        def _shutdown_handler(signum, frame):
+            signame = "SIGTERM" if signum == signal.SIGTERM else "SIGINT"
+            logger.warning("Received %s — stopping server and exiting", signame)
+            self._stop_server()
+            sys.exit(128 + signum)
+
+        signal.signal(signal.SIGTERM, _shutdown_handler)
+        signal.signal(signal.SIGINT, _shutdown_handler)
+
         # Progress tracking
         try:
             from tqdm import tqdm
@@ -801,6 +839,9 @@ class EvalRunner:
                 progress.close()
             if model_path:
                 self._stop_server()
+            # Restore original signal handlers
+            signal.signal(signal.SIGTERM, _original_sigterm)
+            signal.signal(signal.SIGINT, _original_sigint)
 
         # Summary
         logger.info(

@@ -6,6 +6,7 @@ models:
   qwen2.5-14b-instruct:
     display_name: "Qwen 2.5 14B Instruct"
     parameters: 14B
+    context_length: 32768
     hf_repo: "bartowski/Qwen2.5-14B-Instruct-GGUF"
     quantizations:
       Q4_K_M:
@@ -29,6 +30,7 @@ models:
   phi-4-14b:
     display_name: "Phi-4 14B"
     parameters: 14B
+    context_length: 16384
     hf_repo: "bartowski/phi-4-GGUF"
     quantizations:
       Q4_K_M:
@@ -52,6 +54,7 @@ models:
   mistral-nemo-12b-instruct:
     display_name: "Mistral NeMo 12B Instruct"
     parameters: 12B
+    context_length: 32768
     hf_repo: "bartowski/Mistral-Nemo-Instruct-2407-GGUF"
     quantizations:
       Q4_K_M:
@@ -72,6 +75,7 @@ models:
   llama-3.1-8b-instruct:
     display_name: "Llama 3.1 8B Instruct"
     parameters: 8B
+    context_length: 131072
     hf_repo: "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF"
     quantizations:
       Q4_K_M:
@@ -95,6 +99,7 @@ models:
   qwen2.5-7b-instruct:
     display_name: "Qwen 2.5 7B Instruct"
     parameters: 7B
+    context_length: 32768
     hf_repo: "bartowski/Qwen2.5-7B-Instruct-GGUF"
     quantizations:
       Q4_K_M:
@@ -115,6 +120,7 @@ models:
   gemma-2-9b-instruct:
     display_name: "Gemma 2 9B Instruct"
     parameters: 9B
+    context_length: 8192
     hf_repo: "bartowski/gemma-2-9b-it-GGUF"
     quantizations:
       Q4_K_M:
@@ -135,6 +141,7 @@ models:
   glm-4-9b-chat:
     display_name: "GLM-4 9B Chat"
     parameters: 9B
+    context_length: 131072
     hf_repo: "bartowski/glm-4-9b-chat-GGUF"
     quantizations:
       Q4_K_M:
@@ -152,6 +159,7 @@ models:
   smollm2-1.7b-instruct:
     display_name: "SmolLM2 1.7B Instruct"
     parameters: 1.7B
+    context_length: 8192
     hf_repo: "bartowski/SmolLM2-1.7B-Instruct-GGUF"
     quantizations:
       Q8_0:

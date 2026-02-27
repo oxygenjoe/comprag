@@ -8,6 +8,7 @@ Importable as module; also runnable as CLI via `python -m cumrag.generator`.
 """
 
 import argparse
+import atexit
 import json
 import os
 import signal
@@ -213,6 +214,9 @@ class LlamaServer:
             "seed": 42,
         }
 
+        # Register atexit handler to clean up server on normal Python exit
+        atexit.register(self._cleanup)
+
     def __enter__(self) -> "LlamaServer":
         return self
 
@@ -255,6 +259,69 @@ class LlamaServer:
         self._template = load_prompt_template(template_path)
         logger.info("Loaded prompt template (%d chars)", len(self._template))
 
+    # --- Cleanup and port management ---
+
+    def _cleanup(self) -> None:
+        """Atexit handler: stop the server if still running."""
+        if self.is_running:
+            logger.info("Atexit cleanup: stopping llama-server")
+            self.stop()
+
+    def _check_port_available(self, port: int) -> None:
+        """Check if the target port is free; kill orphaned llama-server if found.
+
+        Uses lsof to identify the process holding the port. Only kills it if
+        it's a llama-server process — refuses to kill anything else.
+
+        Args:
+            port: Port number to check.
+
+        Raises:
+            RuntimeError: If the port is occupied by a non-llama-server process.
+        """
+        try:
+            result = subprocess.run(
+                ["lsof", "-ti", f":{port}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return  # Port is free
+
+            pids = result.stdout.strip().split("\n")
+            for pid_str in pids:
+                pid = int(pid_str.strip())
+                # Identify the process
+                try:
+                    cmdline_path = f"/proc/{pid}/cmdline"
+                    with open(cmdline_path, "r") as f:
+                        cmdline = f.read().replace("\x00", " ").strip()
+                except (FileNotFoundError, PermissionError):
+                    cmdline = ""
+
+                if "llama-server" in cmdline or "llama_server" in cmdline:
+                    logger.warning(
+                        "Killed orphaned llama-server (PID %d) on port %d",
+                        pid,
+                        port,
+                    )
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                        time.sleep(0.5)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                else:
+                    raise RuntimeError(
+                        f"Port {port} is occupied by PID {pid} ({cmdline[:100]}), "
+                        f"which is not a llama-server. Free the port manually."
+                    )
+        except FileNotFoundError:
+            # lsof not installed — fall back to /proc/net/tcp check
+            pass
+        except subprocess.TimeoutExpired:
+            pass
+
     # --- Server lifecycle ---
 
     def start(
@@ -284,6 +351,10 @@ class LlamaServer:
                 "External server mode — skipping start (url=%s)", self.base_url
             )
             return
+
+        # Check for orphaned llama-server on the target port
+        target_port = port if port is not None else self.port
+        self._check_port_available(target_port)
 
         if self._process is not None and self._process.poll() is None:
             raise RuntimeError(

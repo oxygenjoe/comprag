@@ -31,8 +31,16 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 VALID_DATASETS = ("rgb", "nq", "halueval")
 DEFAULT_INDEX_DIR = _PROJECT_ROOT / "index"
-DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 DEFAULT_TOP_K = 5
+
+
+def _get_default_embedding_model() -> str:
+    """Read embedding model name from eval_config.yaml (single source of truth)."""
+    try:
+        config = load_config("eval_config")
+        return config["retrieval"]["embedding_model"]
+    except (FileNotFoundError, KeyError):
+        return "all-MiniLM-L6-v2"
 
 logger = get_logger("cumrag.retriever")
 
@@ -60,7 +68,7 @@ class Retriever:
         self,
         index_dir: str = "index",
         dataset: str = "rgb",
-        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+        embedding_model: Optional[str] = None,
     ) -> None:
         """Initialize the retriever with a ChromaDB collection.
 
@@ -70,14 +78,14 @@ class Retriever:
             dataset: Dataset name. Must be one of: rgb, nq, halueval.
                      Collection is looked up as "cumrag_{dataset}".
             embedding_model: Sentence-transformers model for query embedding.
-                             Must match the model used at indexing time.
+                             If None, reads from collection metadata first,
+                             then falls back to eval_config.yaml.
 
         Raises:
             FileNotFoundError: If the index directory does not exist.
             ValueError: If the dataset is invalid, the collection is not found,
                         or the collection is empty.
         """
-        self.embedding_model = embedding_model
         self.dataset = dataset
         self.collection_name = f"cumrag_{dataset}"
 
@@ -113,6 +121,27 @@ class Retriever:
                 f"Collection '{self.collection_name}' not found in {self.index_dir}.\n"
                 f"Available collections: {available_str}\n"
                 f"Run 'python scripts/build_index.py --dataset {dataset}' to build the index."
+            )
+
+        # Resolve embedding model: explicit arg > collection metadata > config
+        collection_meta = self._client.get_collection(self.collection_name).metadata or {}
+        meta_model = collection_meta.get("embedding_model")
+        config_model = _get_default_embedding_model()
+
+        if embedding_model is not None:
+            self.embedding_model = embedding_model
+        elif meta_model:
+            self.embedding_model = meta_model
+        else:
+            self.embedding_model = config_model
+
+        # Warn on mismatch between collection metadata and config
+        if meta_model and meta_model != config_model:
+            logger.warning(
+                "Embedding model mismatch: collection metadata says '%s', "
+                "eval_config.yaml says '%s'. Using collection metadata.",
+                meta_model,
+                config_model,
             )
 
         # Load the embedding function (same model as indexing)
@@ -364,8 +393,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--embedding-model",
         type=str,
-        default=DEFAULT_EMBEDDING_MODEL,
-        help=f"Embedding model name (default: {DEFAULT_EMBEDDING_MODEL}).",
+        default=None,
+        help="Embedding model name (default: from collection metadata or eval_config.yaml).",
     )
     parser.add_argument(
         "--info",

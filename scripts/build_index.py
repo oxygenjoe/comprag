@@ -8,13 +8,13 @@ The retrieval pipeline is CONSTANT across all eval runs. Same embedding
 model, same chunking, same index. Only the generator model varies.
 
 Usage (CLI):
-    python scripts/build_index.py --dataset rgb --chunk-size 512 --overlap 64
+    python scripts/build_index.py --dataset rgb --chunk-size 300 --overlap 64
     python scripts/build_index.py --all
     python scripts/build_index.py --all --force  # rebuild even if exists
 
 Usage (module):
     from scripts.build_index import build_index, chunk_documents
-    build_index("rgb", chunk_size=512, overlap=64)
+    build_index("rgb", chunk_size=300, overlap=64)
 """
 
 import argparse
@@ -46,8 +46,20 @@ from cumrag.utils import get_logger, load_config, setup_logging, timer
 DATASETS_DIR = _PROJECT_ROOT / "datasets"
 INDEX_DIR = _PROJECT_ROOT / "index"
 
-EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
+
+
+def _get_embedding_model_name() -> str:
+    """Read embedding model name from eval_config.yaml (single source of truth)."""
+    try:
+        config = load_config("eval_config")
+        return config["retrieval"]["embedding_model"]
+    except (FileNotFoundError, KeyError):
+        logger.warning(
+            "Could not read retrieval.embedding_model from eval_config.yaml, "
+            "falling back to 'all-MiniLM-L6-v2'"
+        )
+        return "all-MiniLM-L6-v2"
 
 VALID_DATASETS = ("rgb", "nq", "halueval")
 
@@ -89,7 +101,7 @@ _tokenizer = WhitespaceTokenizer()
 
 def chunk_text(
     text: str,
-    chunk_size: int = 512,
+    chunk_size: int = 300,  # ~300 whitespace words ≈ 400-500 BPE tokens, safe for top_k=5 within 4096 ctx
     overlap: int = 64,
 ) -> list[str]:
     """Split text into overlapping chunks by token count.
@@ -123,7 +135,7 @@ def chunk_text(
 
 def chunk_documents(
     documents: list[dict],
-    chunk_size: int = 512,
+    chunk_size: int = 300,  # ~300 whitespace words ≈ 400-500 BPE tokens, safe for top_k=5 within 4096 ctx
     overlap: int = 64,
 ) -> list[dict]:
     """Chunk a list of documents into retrieval-sized pieces.
@@ -341,7 +353,7 @@ def get_embedding_function():
     from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
     return SentenceTransformerEmbeddingFunction(
-        model_name=EMBEDDING_MODEL_NAME,
+        model_name=_get_embedding_model_name(),
     )
 
 
@@ -397,7 +409,7 @@ def collection_exists(client, collection_name: str) -> bool:
 
 def build_index(
     dataset_name: str,
-    chunk_size: int = 512,
+    chunk_size: int = 300,  # ~300 whitespace words ≈ 400-500 BPE tokens, safe for top_k=5 within 4096 ctx
     overlap: int = 64,
     force: bool = False,
     persist_dir: Optional[Path] = None,
@@ -489,7 +501,7 @@ def build_index(
             embedding_function=embedding_fn,
             metadata={
                 "dataset": dataset_name,
-                "embedding_model": EMBEDDING_MODEL_NAME,
+                "embedding_model": _get_embedding_model_name(),
                 "embedding_dim": EMBEDDING_DIM,
                 "chunk_size": chunk_size,
                 "overlap": overlap,
@@ -540,7 +552,7 @@ def build_index(
         "num_chunks": len(chunks),
         "chunk_size": chunk_size,
         "overlap": overlap,
-        "embedding_model": EMBEDDING_MODEL_NAME,
+        "embedding_model": _get_embedding_model_name(),
         "skipped": False,
         "elapsed_seconds": round(t.elapsed, 2),
     }
@@ -556,7 +568,7 @@ def build_index(
 
 
 def build_all(
-    chunk_size: int = 512,
+    chunk_size: int = 300,  # ~300 whitespace words ≈ 400-500 BPE tokens, safe for top_k=5 within 4096 ctx
     overlap: int = 64,
     force: bool = False,
     persist_dir: Optional[Path] = None,
@@ -637,8 +649,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--chunk-size",
         type=int,
-        default=512,
-        help="Maximum tokens per chunk (default: 512).",
+        default=300,
+        help="Maximum whitespace words per chunk (default: 300, ≈400-500 BPE tokens).",
     )
     parser.add_argument(
         "--overlap",
