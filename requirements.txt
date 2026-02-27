@@ -6,8 +6,12 @@ seaborn
 chromadb
 sentence-transformers
 ragas
+ragchecker
 langchain
 langchain-community
+langchain-anthropic
+langchain-openai
+datasets
 huggingface_hub
 requests
 pyyaml
