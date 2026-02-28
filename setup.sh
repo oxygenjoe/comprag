@@ -1,16 +1,44 @@
 #!/usr/bin/env bash
 # setup.sh — One-shot environment setup for CUMRAG eval harness
-# Installs system deps, creates venv, installs Python deps, builds llama.cpp
+# Installs system deps, creates venv, installs Python deps, downloads spacy
+# model, builds llama.cpp, downloads/normalizes datasets, builds vector index.
+#
+# Flags:
+#   --skip-datasets   Skip dataset download, normalization
+#   --skip-index      Skip vector index build
+#
+# Each step is idempotent: re-running is safe, completed steps are skipped.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/.venv"
 LLAMA_DIR="${HOME}/llama.cpp"
 
-echo "=== CUMRAG Setup ==="
+# --- Parse flags ---
+SKIP_DATASETS=0
+SKIP_INDEX=0
+for arg in "$@"; do
+    case "$arg" in
+        --skip-datasets) SKIP_DATASETS=1 ;;
+        --skip-index)    SKIP_INDEX=1 ;;
+        *)               echo "Unknown flag: $arg"; echo "Usage: $0 [--skip-datasets] [--skip-index]"; exit 1 ;;
+    esac
+done
 
-# --- System dependencies ---
-echo "[1/5] Installing system dependencies..."
+TOTAL_STEPS=8
+CURRENT_STEP=0
+step() {
+    CURRENT_STEP=$((CURRENT_STEP + 1))
+    echo ""
+    echo "[${CURRENT_STEP}/${TOTAL_STEPS}] $1"
+}
+
+echo "=== CUMRAG Setup ==="
+echo "  skip-datasets: ${SKIP_DATASETS}"
+echo "  skip-index:    ${SKIP_INDEX}"
+
+# --- Step 1: System dependencies ---
+step "Installing system dependencies..."
 if command -v apt &>/dev/null; then
     sudo apt update && sudo apt install -y \
         python3 python3-venv python3-pip \
@@ -23,20 +51,31 @@ else
     echo "WARNING: Unknown package manager. Install python3, python3-venv, git, cmake, build-essential manually."
 fi
 
-# --- Python virtual environment ---
-echo "[2/5] Creating Python virtual environment at ${VENV_DIR}..."
+# --- Step 2: Python virtual environment ---
+step "Creating Python virtual environment at ${VENV_DIR}..."
 if [ ! -d "${VENV_DIR}" ]; then
     python3 -m venv "${VENV_DIR}"
+    echo "  Created new venv."
+else
+    echo "  Venv already exists, skipping creation."
 fi
 source "${VENV_DIR}/bin/activate"
 
-# --- Python dependencies ---
-echo "[3/5] Installing Python dependencies..."
+# --- Step 3: Python dependencies ---
+step "Installing Python dependencies..."
 pip install --upgrade pip
 pip install -r "${SCRIPT_DIR}/requirements.txt"
 
-# --- llama.cpp ---
-echo "[4/5] Building llama.cpp..."
+# --- Step 4: spaCy model ---
+step "Downloading spaCy language model (en_core_web_sm)..."
+if python -c "import spacy; spacy.load('en_core_web_sm')" &>/dev/null; then
+    echo "  en_core_web_sm already installed, skipping."
+else
+    python -m spacy download en_core_web_sm
+fi
+
+# --- Step 5: llama.cpp ---
+step "Building llama.cpp..."
 if [ ! -d "${LLAMA_DIR}" ]; then
     git clone https://github.com/ggerganov/llama.cpp.git "${LLAMA_DIR}"
 fi
@@ -57,10 +96,33 @@ cmake --build build --config Release -j"$(nproc)"
 
 cd "${SCRIPT_DIR}"
 
-# --- Directory structure ---
-echo "[5/5] Ensuring directory structure..."
+# --- Step 6: Directory structure ---
+step "Ensuring directory structure..."
 mkdir -p config scripts cumrag datasets/rgb datasets/nq datasets/halueval \
-    models index results/raw results/aggregated results/figures docs
+    models index results/raw results/scored results/aggregated results/figures docs
+
+# --- Step 7: Dataset download and normalization ---
+step "Downloading and normalizing datasets..."
+if [ "${SKIP_DATASETS}" -eq 1 ]; then
+    echo "  --skip-datasets flag set, skipping."
+else
+    # Download datasets (idempotent — download_datasets.py skips existing)
+    echo "  Downloading datasets..."
+    python "${SCRIPT_DIR}/scripts/download_datasets.py"
+
+    # Normalize datasets (idempotent — checks for normalized/ dirs)
+    echo "  Normalizing datasets..."
+    python "${SCRIPT_DIR}/scripts/normalize_datasets.py" --all
+fi
+
+# --- Step 8: Build vector index ---
+step "Building vector index..."
+if [ "${SKIP_INDEX}" -eq 1 ]; then
+    echo "  --skip-index flag set, skipping."
+else
+    # build_index.py --all is idempotent — skips collections that exist
+    python "${SCRIPT_DIR}/scripts/build_index.py" --all
+fi
 
 echo ""
 echo "=== Setup complete ==="

@@ -16,3 +16,5 @@ huggingface_hub
 requests
 pyyaml
 tqdm
+spacy
+refchecker
