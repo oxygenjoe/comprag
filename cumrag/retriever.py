@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from cumrag.utils import get_logger, load_config, setup_logging
+from cumrag.utils import get_logger, load_config, make_collection_name, setup_logging
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -43,6 +43,75 @@ def _get_default_embedding_model() -> str:
         return "all-MiniLM-L6-v2"
 
 logger = get_logger("cumrag.retriever")
+
+
+# ---------------------------------------------------------------------------
+# Index validation and collection resolution
+# ---------------------------------------------------------------------------
+
+
+def validate_index(collection, config: dict) -> None:
+    """Check that a ChromaDB collection's metadata matches eval_config parameters.
+
+    Ensures the index was built with the same embedding model and chunk size
+    as the current configuration. Raises immediately on mismatch to prevent
+    silent evaluation against a stale or mismatched index.
+
+    Args:
+        collection: A ChromaDB collection object (must have .metadata attribute).
+        config: Parsed eval_config.yaml dict (must contain retrieval.embedding_model
+                and retrieval.chunk_size).
+
+    Raises:
+        ValueError: If embedding_model or chunk_size_words in collection metadata
+                    does not match the config values.
+    """
+    meta = collection.metadata or {}
+    expected_model = config["retrieval"]["embedding_model"]
+    expected_chunk = config["retrieval"]["chunk_size"]
+
+    if meta.get("embedding_model") != expected_model:
+        raise ValueError(
+            f"Index embedding model mismatch: {meta.get('embedding_model')} "
+            f"vs config {expected_model}. Rebuild index."
+        )
+    if meta.get("chunk_size_words") != expected_chunk:
+        raise ValueError(
+            f"Index chunk size mismatch: {meta.get('chunk_size_words')} "
+            f"vs config {expected_chunk}. Rebuild index."
+        )
+
+
+def resolve_collection_name(dataset_key: str, config: dict) -> str:
+    """Resolve a collection name from eval_config, expanding "auto" entries.
+
+    Looks up ``config["retrieval"]["collections"][dataset_key]``. If the value
+    is ``"auto"``, computes a content-addressed name via ``make_collection_name()``
+    using the config's embedding_model, chunk_size, and overlap. Otherwise
+    returns the explicit collection name from the config.
+
+    Args:
+        dataset_key: Key into config["retrieval"]["collections"]
+                     (e.g. "rgb_noise_robustness", "nq_wiki").
+        config: Parsed eval_config.yaml dict.
+
+    Returns:
+        Resolved collection name string.
+
+    Raises:
+        KeyError: If dataset_key is not found in config["retrieval"]["collections"].
+    """
+    collections = config["retrieval"]["collections"]
+    value = collections[dataset_key]
+
+    if value == "auto":
+        return make_collection_name(
+            dataset=dataset_key,
+            embedding_model=config["retrieval"]["embedding_model"],
+            chunk_size=config["retrieval"]["chunk_size"],
+            chunk_overlap=config["retrieval"]["overlap"],
+        )
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +138,8 @@ class Retriever:
         index_dir: str = "index",
         dataset: str = "rgb",
         embedding_model: Optional[str] = None,
+        collection_name: Optional[str] = None,
+        config: Optional[dict] = None,
     ) -> None:
         """Initialize the retriever with a ChromaDB collection.
 
@@ -76,18 +147,25 @@ class Retriever:
             index_dir: Path to the ChromaDB persistence directory.
                        Relative paths resolve from the project root.
             dataset: Dataset name. Must be one of: rgb, nq, halueval.
-                     Collection is looked up as "cumrag_{dataset}".
+                     Used for fallback collection naming as "cumrag_{dataset}"
+                     when collection_name is not provided.
             embedding_model: Sentence-transformers model for query embedding.
                              If None, reads from collection metadata first,
                              then falls back to eval_config.yaml.
+            collection_name: Explicit ChromaDB collection name (e.g. a
+                             content-addressed name from resolve_collection_name).
+                             If None, falls back to "cumrag_{dataset}".
+            config: Parsed eval_config.yaml dict. When provided, validate_index()
+                    is called after loading the collection to ensure metadata
+                    matches config parameters.
 
         Raises:
             FileNotFoundError: If the index directory does not exist.
             ValueError: If the dataset is invalid, the collection is not found,
-                        or the collection is empty.
+                        the collection is empty, or index metadata mismatches config.
         """
         self.dataset = dataset
-        self.collection_name = f"cumrag_{dataset}"
+        self.collection_name = collection_name if collection_name else f"cumrag_{dataset}"
 
         # Resolve index directory
         index_path = Path(index_dir)
@@ -142,6 +220,12 @@ class Retriever:
                 "eval_config.yaml says '%s'. Using collection metadata.",
                 meta_model,
                 config_model,
+            )
+
+        # Validate index metadata against config (if config provided)
+        if config is not None:
+            validate_index(
+                self._client.get_collection(self.collection_name), config
             )
 
         # Load the embedding function (same model as indexing)
