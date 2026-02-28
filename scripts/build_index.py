@@ -19,8 +19,9 @@ Usage (CLI):
     python scripts/build_index.py --all --force  # rebuild even if exists
 
 Usage (module):
-    from scripts.build_index import build_index, chunk_documents
-    build_index("rgb", chunk_size=300, overlap=64, subset="noise_robustness")
+    from scripts.build_index import build_rgb_index, build_halueval_index
+    build_rgb_index("noise_robustness", chunk_size=300, overlap=64)
+    build_halueval_index(chunk_size=300, overlap=64)
 """
 
 import argparse
@@ -70,6 +71,14 @@ def _get_embedding_model_name() -> str:
         return "all-MiniLM-L6-v2"
 
 VALID_DATASETS = ("rgb", "nq", "halueval")
+
+# RGB subsets — each gets its own ChromaDB collection
+RGB_SUBSETS = (
+    "noise_robustness",
+    "negative_rejection",
+    "information_integration",
+    "counterfactual_robustness",
+)
 
 logger = get_logger("cumrag.build_index")
 
@@ -597,6 +606,444 @@ def build_index(
     return stats
 
 
+def build_rgb_index(
+    subset: str,
+    chunk_size: int = 300,
+    overlap: int = 64,
+    force: bool = False,
+    persist_dir: Optional[Path] = None,
+    batch_size: int = 256,
+) -> dict:
+    """Build a ChromaDB index for a single RGB subset from normalized JSONL.
+
+    RGB tests retrieval ROBUSTNESS, not retrieval quality. Each question
+    comes with its own passages that must be indexed so the retriever
+    finds them. This function reads the normalized JSONL produced by
+    normalize_datasets.py and indexes each sample's ``metadata.original_passages``
+    into a per-subset ChromaDB collection.
+
+    Document IDs link back to the sample: ``{sample_id}_passage_{i}``.
+
+    Args:
+        subset: RGB subset name, one of: noise_robustness, negative_rejection,
+                information_integration, counterfactual_robustness.
+        chunk_size: Whitespace words per chunk (default 300).
+        overlap: Overlapping words between chunks (default 64).
+        force: If True, delete and rebuild existing collection.
+        persist_dir: Override index directory (default: index/).
+        batch_size: Number of chunks to embed and insert per batch.
+
+    Returns:
+        Dict with indexing stats.
+
+    Raises:
+        FileNotFoundError: If normalized JSONL file does not exist.
+        ValueError: If no passages found to index.
+    """
+    if subset not in RGB_SUBSETS:
+        raise ValueError(
+            f"Invalid RGB subset '{subset}'. Must be one of: {', '.join(RGB_SUBSETS)}"
+        )
+
+    embedding_model = _get_embedding_model_name()
+
+    # RGB subsets get per-subset collection names:
+    #   dataset key = "rgb_{subset}" -> cumrag_rgb_noise_robustness_300w_{hash}
+    dataset_key = f"rgb_{subset}"
+    collection_name = make_collection_name(
+        dataset=dataset_key,
+        embedding_model=embedding_model,
+        chunk_size=chunk_size,
+        chunk_overlap=overlap,
+    )
+
+    client = get_chroma_client(persist_dir)
+
+    # Idempotency check
+    if not force and collection_exists(client, collection_name):
+        count = client.get_collection(collection_name).count()
+        logger.info(
+            "Collection '%s' already exists with %d entries. "
+            "Use --force to rebuild.",
+            collection_name,
+            count,
+        )
+        return {
+            "dataset": "rgb",
+            "subset": subset,
+            "collection_name": collection_name,
+            "num_chunks": count,
+            "skipped": True,
+            "elapsed_seconds": 0.0,
+        }
+
+    # Delete existing collection if force rebuild
+    if force:
+        try:
+            client.delete_collection(collection_name)
+            logger.info("Deleted existing collection '%s' for rebuild.", collection_name)
+        except Exception:
+            pass
+
+    # Locate normalized JSONL
+    normalized_path = DATASETS_DIR / "rgb" / "normalized" / f"{subset}.jsonl"
+    if not normalized_path.exists():
+        raise FileNotFoundError(
+            f"Normalized RGB file not found: {normalized_path}\n"
+            f"Run 'python scripts/normalize_datasets.py --datasets rgb' first."
+        )
+
+    with timer(f"RGB {subset} indexing", logger=logger) as t:
+        # Step 1: Load normalized samples and extract passages
+        logger.info("Loading normalized RGB samples from %s", normalized_path)
+        samples = _load_jsonl(normalized_path)
+        logger.info("Loaded %d samples for RGB/%s", len(samples), subset)
+
+        # Step 2: Extract passages from metadata.original_passages and chunk them
+        all_chunks = []
+        num_passages = 0
+
+        for sample in samples:
+            sample_id = sample["sample_id"]
+            metadata = sample.get("metadata", {})
+            passages = metadata.get("original_passages", [])
+
+            for passage_idx, passage in enumerate(passages):
+                # Passages can be strings or dicts with a "text" field
+                if isinstance(passage, str):
+                    passage_text = passage.strip()
+                elif isinstance(passage, dict):
+                    passage_text = passage.get("text", passage.get("passage", "")).strip()
+                else:
+                    continue
+
+                if not passage_text:
+                    continue
+
+                num_passages += 1
+
+                # Chunk the passage (most RGB passages fit in one chunk,
+                # but chunk for consistency with the pipeline)
+                text_chunks = chunk_text(passage_text, chunk_size=chunk_size, overlap=overlap)
+
+                for chunk_idx, chunk_str in enumerate(text_chunks):
+                    chunk_id = f"{sample_id}_passage_{passage_idx}"
+                    if len(text_chunks) > 1:
+                        chunk_id = f"{chunk_id}_chunk_{chunk_idx}"
+
+                    all_chunks.append({
+                        "chunk_id": chunk_id,
+                        "text": chunk_str,
+                        "sample_id": sample_id,
+                        "passage_index": passage_idx,
+                        "chunk_index": chunk_idx,
+                        "dataset": "rgb",
+                        "subset": subset,
+                    })
+
+        if not all_chunks:
+            raise ValueError(
+                f"No passages found to index for RGB/{subset}. "
+                f"Check that normalized JSONL has metadata.original_passages."
+            )
+
+        logger.info(
+            "RGB/%s: %d passages -> %d chunks from %d samples",
+            subset,
+            num_passages,
+            len(all_chunks),
+            len(samples),
+        )
+
+        # Step 3: Create collection and insert
+        embedding_fn = get_embedding_function()
+
+        collection_metadata = {
+            "embedding_model": embedding_model,
+            "embedding_dim": EMBEDDING_DIM,
+            "chunk_size_words": chunk_size,
+            "chunk_overlap_words": overlap,
+            "dataset": "rgb",
+            "subset": subset,
+            "index_type": "rgb_per_question",
+            "num_samples": len(samples),
+            "num_passages": num_passages,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "cumrag_version": CUMRAG_VERSION,
+        }
+
+        collection = client.get_or_create_collection(
+            name=collection_name,
+            embedding_function=embedding_fn,
+            metadata=collection_metadata,
+        )
+
+        logger.info(
+            "Embedding and inserting %d RGB chunks (batch_size=%d) ...",
+            len(all_chunks),
+            batch_size,
+        )
+
+        total_batches = (len(all_chunks) + batch_size - 1) // batch_size
+
+        for batch_idx in tqdm(
+            range(total_batches),
+            desc=f"Embedding RGB/{subset}",
+            unit="batch",
+        ):
+            start = batch_idx * batch_size
+            end = min(start + batch_size, len(all_chunks))
+            batch = all_chunks[start:end]
+
+            ids = [c["chunk_id"] for c in batch]
+            texts = [c["text"] for c in batch]
+            metadatas = [
+                {
+                    "sample_id": c["sample_id"],
+                    "passage_index": c["passage_index"],
+                    "chunk_index": c["chunk_index"],
+                    "dataset": c["dataset"],
+                    "subset": c["subset"],
+                }
+                for c in batch
+            ]
+
+            collection.add(
+                ids=ids,
+                documents=texts,
+                metadatas=metadatas,
+            )
+
+    stats = {
+        "dataset": "rgb",
+        "subset": subset,
+        "collection_name": collection_name,
+        "num_samples": len(samples),
+        "num_passages": num_passages,
+        "num_chunks": len(all_chunks),
+        "chunk_size": chunk_size,
+        "overlap": overlap,
+        "embedding_model": embedding_model,
+        "skipped": False,
+        "elapsed_seconds": round(t.elapsed, 2),
+    }
+
+    logger.info(
+        "RGB index built for '%s': %d chunks in collection '%s' (%.1fs)",
+        subset,
+        len(all_chunks),
+        collection_name,
+        t.elapsed,
+    )
+
+    return stats
+
+
+def build_halueval_index(
+    chunk_size: int = 300,
+    overlap: int = 64,
+    force: bool = False,
+    persist_dir: Optional[Path] = None,
+    batch_size: int = 256,
+) -> dict:
+    """Build a ChromaDB index for HaluEval from normalized JSONL.
+
+    HaluEval provides a ``knowledge`` field per sample. This function
+    indexes each sample's knowledge text into a single ``cumrag_halueval_*``
+    collection, with document IDs that link back to the sample.
+
+    Args:
+        chunk_size: Whitespace words per chunk (default 300).
+        overlap: Overlapping words between chunks (default 64).
+        force: If True, delete and rebuild existing collection.
+        persist_dir: Override index directory (default: index/).
+        batch_size: Number of chunks to embed and insert per batch.
+
+    Returns:
+        Dict with indexing stats.
+
+    Raises:
+        FileNotFoundError: If normalized JSONL file does not exist.
+        ValueError: If no knowledge fields found to index.
+    """
+    embedding_model = _get_embedding_model_name()
+
+    collection_name = make_collection_name(
+        dataset="halueval",
+        embedding_model=embedding_model,
+        chunk_size=chunk_size,
+        chunk_overlap=overlap,
+    )
+
+    client = get_chroma_client(persist_dir)
+
+    # Idempotency check
+    if not force and collection_exists(client, collection_name):
+        count = client.get_collection(collection_name).count()
+        logger.info(
+            "Collection '%s' already exists with %d entries. "
+            "Use --force to rebuild.",
+            collection_name,
+            count,
+        )
+        return {
+            "dataset": "halueval",
+            "subset": "qa",
+            "collection_name": collection_name,
+            "num_chunks": count,
+            "skipped": True,
+            "elapsed_seconds": 0.0,
+        }
+
+    # Delete existing collection if force rebuild
+    if force:
+        try:
+            client.delete_collection(collection_name)
+            logger.info("Deleted existing collection '%s' for rebuild.", collection_name)
+        except Exception:
+            pass
+
+    # Locate normalized JSONL
+    normalized_path = DATASETS_DIR / "halueval" / "normalized" / "qa.jsonl"
+    if not normalized_path.exists():
+        raise FileNotFoundError(
+            f"Normalized HaluEval file not found: {normalized_path}\n"
+            f"Run 'python scripts/normalize_datasets.py --datasets halueval' first."
+        )
+
+    with timer("HaluEval indexing", logger=logger) as t:
+        # Step 1: Load normalized samples and extract knowledge fields
+        logger.info("Loading normalized HaluEval samples from %s", normalized_path)
+        samples = _load_jsonl(normalized_path)
+        logger.info("Loaded %d HaluEval samples", len(samples))
+
+        # Step 2: Extract knowledge text and chunk
+        all_chunks = []
+        skipped_no_knowledge = 0
+
+        for sample in samples:
+            sample_id = sample["sample_id"]
+            metadata = sample.get("metadata", {})
+            knowledge = metadata.get("knowledge", "")
+
+            if not knowledge or not knowledge.strip():
+                skipped_no_knowledge += 1
+                continue
+
+            knowledge_text = knowledge.strip()
+            text_chunks = chunk_text(knowledge_text, chunk_size=chunk_size, overlap=overlap)
+
+            for chunk_idx, chunk_str in enumerate(text_chunks):
+                chunk_id = f"{sample_id}_knowledge"
+                if len(text_chunks) > 1:
+                    chunk_id = f"{chunk_id}_chunk_{chunk_idx}"
+
+                all_chunks.append({
+                    "chunk_id": chunk_id,
+                    "text": chunk_str,
+                    "sample_id": sample_id,
+                    "chunk_index": chunk_idx,
+                    "dataset": "halueval",
+                    "subset": "qa",
+                })
+
+        if skipped_no_knowledge:
+            logger.warning(
+                "HaluEval: %d samples had no knowledge field", skipped_no_knowledge
+            )
+
+        if not all_chunks:
+            raise ValueError(
+                "No knowledge fields found to index for HaluEval. "
+                "Check that normalized JSONL has metadata.knowledge."
+            )
+
+        logger.info(
+            "HaluEval: %d knowledge chunks from %d samples",
+            len(all_chunks),
+            len(samples),
+        )
+
+        # Step 3: Create collection and insert
+        embedding_fn = get_embedding_function()
+
+        collection_metadata = {
+            "embedding_model": embedding_model,
+            "embedding_dim": EMBEDDING_DIM,
+            "chunk_size_words": chunk_size,
+            "chunk_overlap_words": overlap,
+            "dataset": "halueval",
+            "subset": "qa",
+            "index_type": "halueval_knowledge",
+            "num_samples": len(samples),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "cumrag_version": CUMRAG_VERSION,
+        }
+
+        collection = client.get_or_create_collection(
+            name=collection_name,
+            embedding_function=embedding_fn,
+            metadata=collection_metadata,
+        )
+
+        logger.info(
+            "Embedding and inserting %d HaluEval chunks (batch_size=%d) ...",
+            len(all_chunks),
+            batch_size,
+        )
+
+        total_batches = (len(all_chunks) + batch_size - 1) // batch_size
+
+        for batch_idx in tqdm(
+            range(total_batches),
+            desc="Embedding HaluEval",
+            unit="batch",
+        ):
+            start = batch_idx * batch_size
+            end = min(start + batch_size, len(all_chunks))
+            batch = all_chunks[start:end]
+
+            ids = [c["chunk_id"] for c in batch]
+            texts = [c["text"] for c in batch]
+            metadatas = [
+                {
+                    "sample_id": c["sample_id"],
+                    "chunk_index": c["chunk_index"],
+                    "dataset": c["dataset"],
+                    "subset": c["subset"],
+                }
+                for c in batch
+            ]
+
+            collection.add(
+                ids=ids,
+                documents=texts,
+                metadatas=metadatas,
+            )
+
+    stats = {
+        "dataset": "halueval",
+        "subset": "qa",
+        "collection_name": collection_name,
+        "num_samples": len(samples),
+        "num_chunks": len(all_chunks),
+        "chunk_size": chunk_size,
+        "overlap": overlap,
+        "embedding_model": embedding_model,
+        "skipped": False,
+        "elapsed_seconds": round(t.elapsed, 2),
+    }
+
+    logger.info(
+        "HaluEval index built: %d chunks in collection '%s' (%.1fs)",
+        len(all_chunks),
+        collection_name,
+        t.elapsed,
+    )
+
+    return stats
+
+
 def build_all(
     chunk_size: int = 300,  # ~300 whitespace words ≈ 400-500 BPE tokens, safe for top_k=5 within 4096 ctx
     overlap: int = 64,
@@ -606,7 +1053,12 @@ def build_all(
 ) -> list[dict]:
     """Build ChromaDB indexes for all available datasets.
 
-    Skips datasets that don't have downloaded data yet (logs a warning).
+    Dispatches to dataset-specific indexing logic:
+    - RGB: builds one collection per subset via build_rgb_index()
+    - HaluEval: indexes knowledge fields via build_halueval_index()
+    - NQ: skipped — requires global Wikipedia corpus (not available in Phase 2)
+
+    Skips datasets that don't have downloaded/normalized data yet.
 
     Args:
         chunk_size: Tokens per chunk.
@@ -616,14 +1068,15 @@ def build_all(
         batch_size: Embedding batch size.
 
     Returns:
-        List of stats dicts (one per dataset attempted).
+        List of stats dicts (one per collection built).
     """
     results = []
 
-    for ds_name in VALID_DATASETS:
+    # --- RGB: per-subset indexing ---
+    for subset in RGB_SUBSETS:
         try:
-            stats = build_index(
-                dataset_name=ds_name,
+            stats = build_rgb_index(
+                subset=subset,
                 chunk_size=chunk_size,
                 overlap=overlap,
                 force=force,
@@ -632,11 +1085,34 @@ def build_all(
             )
             results.append(stats)
         except FileNotFoundError as e:
-            logger.warning("Skipping '%s': %s", ds_name, e)
+            logger.warning("Skipping RGB/%s: %s", subset, e)
         except ValueError as e:
-            logger.warning("Skipping '%s': %s", ds_name, e)
+            logger.warning("Skipping RGB/%s: %s", subset, e)
         except Exception as e:
-            logger.error("Failed to index '%s': %s", ds_name, e, exc_info=True)
+            logger.error("Failed to index RGB/%s: %s", subset, e, exc_info=True)
+
+    # --- NQ: requires global Wikipedia corpus, deferred ---
+    logger.info(
+        "Skipping NQ: requires global Wikipedia corpus index. "
+        "NQ indexing is deferred to Phase 3 (Wikipedia embedding pipeline)."
+    )
+
+    # --- HaluEval: knowledge field indexing ---
+    try:
+        stats = build_halueval_index(
+            chunk_size=chunk_size,
+            overlap=overlap,
+            force=force,
+            persist_dir=persist_dir,
+            batch_size=batch_size,
+        )
+        results.append(stats)
+    except FileNotFoundError as e:
+        logger.warning("Skipping HaluEval: %s", e)
+    except ValueError as e:
+        logger.warning("Skipping HaluEval: %s", e)
+    except Exception as e:
+        logger.error("Failed to index HaluEval: %s", e, exc_info=True)
 
     return results
 
@@ -745,6 +1221,50 @@ def main(argv: Optional[list[str]] = None) -> int:
                 persist_dir=persist_dir,
                 batch_size=args.batch_size,
             )
+        elif args.dataset == "rgb":
+            # RGB: per-subset indexing from normalized JSONL
+            if args.subset:
+                # Single subset
+                result = build_rgb_index(
+                    subset=args.subset,
+                    chunk_size=args.chunk_size,
+                    overlap=args.overlap,
+                    force=args.force,
+                    persist_dir=persist_dir,
+                    batch_size=args.batch_size,
+                )
+                results = [result]
+            else:
+                # All RGB subsets
+                results = []
+                for subset in RGB_SUBSETS:
+                    result = build_rgb_index(
+                        subset=subset,
+                        chunk_size=args.chunk_size,
+                        overlap=args.overlap,
+                        force=args.force,
+                        persist_dir=persist_dir,
+                        batch_size=args.batch_size,
+                    )
+                    results.append(result)
+        elif args.dataset == "halueval":
+            # HaluEval: knowledge field indexing from normalized JSONL
+            result = build_halueval_index(
+                chunk_size=args.chunk_size,
+                overlap=args.overlap,
+                force=args.force,
+                persist_dir=persist_dir,
+                batch_size=args.batch_size,
+            )
+            results = [result]
+        elif args.dataset == "nq":
+            # NQ: requires global Wikipedia corpus, not available yet
+            logger.info(
+                "NQ indexing requires a global Wikipedia corpus. "
+                "This is deferred to Phase 3. Use the general build_index() "
+                "if you have pre-chunked NQ documents available."
+            )
+            results = []
         else:
             result = build_index(
                 dataset_name=args.dataset,
@@ -764,11 +1284,17 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         for r in results:
             status = "SKIPPED (exists)" if r.get("skipped") else "BUILT"
+            label = r["dataset"]
+            if r.get("subset"):
+                label = f"{label}/{r['subset']}"
             print(
-                f"  {r['dataset']:<12} {status:<20} "
+                f"  {label:<35} {status:<20} "
                 f"chunks={r['num_chunks']:<8} "
                 f"time={r.get('elapsed_seconds', 0):.1f}s"
             )
+
+        if not results:
+            print("  (no indexes built)")
 
         print("=" * 60)
         return 0
