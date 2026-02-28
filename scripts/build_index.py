@@ -4,23 +4,30 @@
 Chunks documents from downloaded eval datasets, embeds with
 all-MiniLM-L6-v2 (384-dim), and persists to ChromaDB in index/.
 
+Uses content-addressed collection names that encode indexing parameters
+(dataset, embedding model, chunk size, overlap) via SHA256 hash prefix,
+e.g. ``cumrag_rgb_300w_a3f7c2d1``. This prevents stale index reuse when
+any parameter changes.
+
 The retrieval pipeline is CONSTANT across all eval runs. Same embedding
 model, same chunking, same index. Only the generator model varies.
 
 Usage (CLI):
     python scripts/build_index.py --dataset rgb --chunk-size 300 --overlap 64
+    python scripts/build_index.py --dataset rgb --subset noise_robustness
     python scripts/build_index.py --all
     python scripts/build_index.py --all --force  # rebuild even if exists
 
 Usage (module):
     from scripts.build_index import build_index, chunk_documents
-    build_index("rgb", chunk_size=300, overlap=64)
+    build_index("rgb", chunk_size=300, overlap=64, subset="noise_robustness")
 """
 
 import argparse
 import hashlib
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -37,7 +44,7 @@ _PROJECT_ROOT = _SCRIPT_DIR.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from cumrag.utils import get_logger, load_config, setup_logging, timer
+from cumrag.utils import get_logger, load_config, make_collection_name, setup_logging, timer
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -47,6 +54,7 @@ DATASETS_DIR = _PROJECT_ROOT / "datasets"
 INDEX_DIR = _PROJECT_ROOT / "index"
 
 EMBEDDING_DIM = 384
+CUMRAG_VERSION = "2.0"
 
 
 def _get_embedding_model_name() -> str:
@@ -411,6 +419,7 @@ def build_index(
     dataset_name: str,
     chunk_size: int = 300,  # ~300 whitespace words ≈ 400-500 BPE tokens, safe for top_k=5 within 4096 ctx
     overlap: int = 64,
+    subset: Optional[str] = None,
     force: bool = False,
     persist_dir: Optional[Path] = None,
     batch_size: int = 256,
@@ -419,25 +428,38 @@ def build_index(
 
     Loads documents from the dataset directory, chunks them, embeds with
     all-MiniLM-L6-v2, and persists to ChromaDB. Each dataset gets its
-    own collection.
+    own content-addressed collection with versioned naming.
+
+    Collection names are deterministic based on (dataset, embedding_model,
+    chunk_size, chunk_overlap), e.g. ``cumrag_rgb_300w_a3f7c2d1``.
 
     Args:
         dataset_name: One of 'rgb', 'nq', 'halueval'.
-        chunk_size: Tokens per chunk (default 512).
-        overlap: Overlap tokens between chunks (default 64).
+        chunk_size: Whitespace words per chunk (default 300).
+        overlap: Overlapping words between chunks (default 64).
+        subset: Optional subset name for per-subset collections
+                (e.g. "noise_robustness" for RGB). Stored in metadata.
         force: If True, delete and rebuild existing collection.
         persist_dir: Override index directory (default: index/).
         batch_size: Number of chunks to embed and insert per batch.
 
     Returns:
-        Dict with indexing stats: dataset, num_documents, num_chunks,
+        Dict with indexing stats: dataset, subset, num_documents, num_chunks,
         collection_name, elapsed_seconds.
 
     Raises:
         FileNotFoundError: If dataset not downloaded yet.
         ValueError: If no indexable documents found.
     """
-    collection_name = f"cumrag_{dataset_name}"
+    embedding_model = _get_embedding_model_name()
+
+    # Content-addressed collection name from indexing parameters
+    collection_name = make_collection_name(
+        dataset=dataset_name,
+        embedding_model=embedding_model,
+        chunk_size=chunk_size,
+        chunk_overlap=overlap,
+    )
 
     client = get_chroma_client(persist_dir)
 
@@ -452,6 +474,7 @@ def build_index(
         )
         return {
             "dataset": dataset_name,
+            "subset": subset,
             "collection_name": collection_name,
             "num_chunks": count,
             "skipped": True,
@@ -493,19 +516,24 @@ def build_index(
                 f"Check that documents have sufficient text content."
             )
 
-        # Step 3: Create collection and embed + insert in batches
+        # Step 3: Create collection with full indexing metadata and embed + insert
         embedding_fn = get_embedding_function()
+
+        collection_metadata = {
+            "embedding_model": embedding_model,
+            "embedding_dim": EMBEDDING_DIM,
+            "chunk_size_words": chunk_size,
+            "chunk_overlap_words": overlap,
+            "dataset": dataset_name,
+            "subset": subset or "",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "cumrag_version": CUMRAG_VERSION,
+        }
 
         collection = client.get_or_create_collection(
             name=collection_name,
             embedding_function=embedding_fn,
-            metadata={
-                "dataset": dataset_name,
-                "embedding_model": _get_embedding_model_name(),
-                "embedding_dim": EMBEDDING_DIM,
-                "chunk_size": chunk_size,
-                "overlap": overlap,
-            },
+            metadata=collection_metadata,
         )
 
         logger.info(
@@ -547,20 +575,22 @@ def build_index(
 
     stats = {
         "dataset": dataset_name,
+        "subset": subset,
         "collection_name": collection_name,
         "num_documents": len(documents),
         "num_chunks": len(chunks),
         "chunk_size": chunk_size,
         "overlap": overlap,
-        "embedding_model": _get_embedding_model_name(),
+        "embedding_model": embedding_model,
         "skipped": False,
         "elapsed_seconds": round(t.elapsed, 2),
     }
 
     logger.info(
-        "Index built for '%s': %d chunks in %.1fs",
+        "Index built for '%s': %d chunks in collection '%s' (%.1fs)",
         dataset_name,
         len(chunks),
+        collection_name,
         t.elapsed,
     )
 
@@ -627,6 +657,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         epilog=(
             "Examples:\n"
             "  %(prog)s --dataset rgb\n"
+            "  %(prog)s --dataset rgb --subset noise_robustness\n"
             "  %(prog)s --dataset rgb --chunk-size 512 --overlap 64\n"
             "  %(prog)s --all\n"
             "  %(prog)s --all --force\n"
@@ -646,6 +677,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Build indexes for all available datasets.",
     )
 
+    parser.add_argument(
+        "--subset",
+        type=str,
+        default=None,
+        help="Optional subset name for per-subset collections (e.g. 'noise_robustness' for RGB).",
+    )
     parser.add_argument(
         "--chunk-size",
         type=int,
@@ -713,6 +750,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 dataset_name=args.dataset,
                 chunk_size=args.chunk_size,
                 overlap=args.overlap,
+                subset=args.subset,
                 force=args.force,
                 persist_dir=persist_dir,
                 batch_size=args.batch_size,

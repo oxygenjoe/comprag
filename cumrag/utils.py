@@ -2,10 +2,12 @@
 
 Provides JSONL I/O, timing utilities, hardware metadata collection,
 resource monitoring, YAML config loading, reproducibility seed setter,
-and logging setup. Importable as module; also runnable as CLI via
-`python -m cumrag.utils` to print hardware info.
+content-addressed collection naming, and logging setup. Importable as
+module; also runnable as CLI via `python -m cumrag.utils` to print
+hardware info.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -237,6 +239,40 @@ def load_config(name: str, config_dir: Optional[Union[str, Path]] = None) -> dic
 
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+# ---------------------------------------------------------------------------
+# Content-addressed collection naming
+# ---------------------------------------------------------------------------
+
+
+def make_collection_name(
+    dataset: str,
+    embedding_model: str,
+    chunk_size: int,
+    chunk_overlap: int,
+) -> str:
+    """Generate a deterministic, versioned ChromaDB collection name.
+
+    Encodes the indexing parameters into the collection name via a SHA256
+    hash prefix. This prevents stale index reuse when any parameter changes.
+
+    Args:
+        dataset: Dataset identifier (e.g. "rgb_noise_robustness", "nq_wiki").
+        embedding_model: Sentence-transformers model name (e.g. "all-MiniLM-L6-v2").
+        chunk_size: Chunk size in whitespace words.
+        chunk_overlap: Chunk overlap in whitespace words.
+
+    Returns:
+        Collection name in the format ``cumrag_{dataset}_{chunk_size}w_{hash[:8]}``.
+
+    Examples:
+        >>> make_collection_name("rgb_noise_robustness", "all-MiniLM-L6-v2", 300, 64)
+        'cumrag_rgb_noise_robustness_300w_...'
+    """
+    params = f"{dataset}|{embedding_model}|{chunk_size}|{chunk_overlap}"
+    param_hash = hashlib.sha256(params.encode()).hexdigest()[:8]
+    return f"cumrag_{dataset}_{chunk_size}w_{param_hash}"
 
 
 # ---------------------------------------------------------------------------
