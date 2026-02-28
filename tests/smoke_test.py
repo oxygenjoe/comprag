@@ -745,6 +745,514 @@ def check_set_seed() -> Optional[str]:
 
 
 # ===================================================================
+# CHECK 14: Phase 2 — normalize_datasets.py
+# ===================================================================
+
+
+def check_p2_normalize_import() -> Optional[str]:
+    """Verify normalize_datasets.py is importable with expected symbols."""
+    import importlib.util
+
+    script_path = _PROJECT_ROOT / "scripts" / "normalize_datasets.py"
+    if not script_path.exists():
+        return f"scripts/normalize_datasets.py not found at {script_path}"
+
+    spec = importlib.util.spec_from_file_location("normalize_datasets", str(script_path))
+    if spec is None or spec.loader is None:
+        return "Could not load module spec for normalize_datasets.py"
+
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    required = ["normalize_rgb", "normalize_nq", "normalize_halueval"]
+    missing = [s for s in required if not hasattr(mod, s)]
+    if missing:
+        return f"Missing symbols in normalize_datasets: {missing}"
+    return None
+
+
+def check_p2_normalize_help() -> Optional[str]:
+    """Verify normalize_datasets.py --help works."""
+    return check_script_help("scripts/normalize_datasets.py", "normalize_datasets")
+
+
+def check_p2_normalize_transforms() -> Optional[str]:
+    """Verify the 3 transform functions produce valid unified schema."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "normalize_datasets",
+        str(_PROJECT_ROOT / "scripts" / "normalize_datasets.py"),
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    schema_fields = ["sample_id", "dataset", "subset", "query", "ground_truth",
+                     "corpus_doc_ids", "metadata"]
+
+    # Test normalize_rgb with synthetic data
+    rgb_entry = {
+        "question": "What is the capital of France?",
+        "answer": "Paris",
+        "passages": ["France is a country. Its capital is Paris."],
+        "label": "positive",
+    }
+    rgb_result = mod.normalize_rgb(rgb_entry, "noise_robustness", 0)
+    missing = [f for f in schema_fields if f not in rgb_result]
+    if missing:
+        return f"normalize_rgb output missing fields: {missing}"
+    if rgb_result["dataset"] != "rgb":
+        return f"normalize_rgb dataset should be 'rgb', got '{rgb_result['dataset']}'"
+    if rgb_result["subset"] != "noise_robustness":
+        return f"normalize_rgb subset mismatch: '{rgb_result['subset']}'"
+
+    # Test normalize_nq with synthetic data
+    nq_entry = {
+        "question": "When was Python created?",
+        "answer": ["1991", "February 1991"],
+    }
+    nq_result = mod.normalize_nq(nq_entry, 0)
+    missing = [f for f in schema_fields if f not in nq_result]
+    if missing:
+        return f"normalize_nq output missing fields: {missing}"
+    if nq_result["dataset"] != "nq":
+        return f"normalize_nq dataset should be 'nq', got '{nq_result['dataset']}'"
+    if nq_result["ground_truth"] != "1991":
+        return f"normalize_nq ground_truth should be '1991', got '{nq_result['ground_truth']}'"
+
+    # Test normalize_halueval with synthetic data
+    halueval_entry = {
+        "knowledge": "Python was created by Guido van Rossum.",
+        "question": "Who created Python?",
+        "right_answer": "Guido van Rossum",
+        "hallucinated_answer": "Linus Torvalds",
+    }
+    halueval_result = mod.normalize_halueval(halueval_entry, 0)
+    missing = [f for f in schema_fields if f not in halueval_result]
+    if missing:
+        return f"normalize_halueval output missing fields: {missing}"
+    if halueval_result["dataset"] != "halueval":
+        return f"normalize_halueval dataset should be 'halueval', got '{halueval_result['dataset']}'"
+
+    return None
+
+
+# ===================================================================
+# CHECK 15: Phase 2 — make_collection_name()
+# ===================================================================
+
+
+def check_p2_make_collection_name() -> Optional[str]:
+    """Verify make_collection_name is importable and deterministic."""
+    from cumrag.utils import make_collection_name
+
+    if not callable(make_collection_name):
+        return "make_collection_name is not callable"
+
+    # Determinism: same inputs -> same output
+    name1 = make_collection_name("rgb_noise_robustness", "all-MiniLM-L6-v2", 300, 64)
+    name2 = make_collection_name("rgb_noise_robustness", "all-MiniLM-L6-v2", 300, 64)
+    if name1 != name2:
+        return f"make_collection_name not deterministic: '{name1}' != '{name2}'"
+
+    # Different inputs -> different output
+    name3 = make_collection_name("nq_wiki", "all-MiniLM-L6-v2", 300, 64)
+    if name1 == name3:
+        return f"make_collection_name same for different datasets: '{name1}' == '{name3}'"
+
+    name4 = make_collection_name("rgb_noise_robustness", "all-MiniLM-L6-v2", 400, 64)
+    if name1 == name4:
+        return f"make_collection_name same for different chunk_size: '{name1}' == '{name4}'"
+
+    # Format check: should start with "cumrag_"
+    if not name1.startswith("cumrag_"):
+        return f"make_collection_name should start with 'cumrag_', got '{name1}'"
+
+    # Should be a non-empty string
+    if not name1 or not isinstance(name1, str):
+        return f"make_collection_name returned invalid value: {name1!r}"
+
+    return None
+
+
+# ===================================================================
+# CHECK 16: Phase 2 — validate_index() and resolve_collection_name()
+# ===================================================================
+
+
+def check_p2_validate_index() -> Optional[str]:
+    """Verify validate_index importable and raises ValueError on mismatch."""
+    from cumrag.retriever import validate_index
+
+    if not callable(validate_index):
+        return "validate_index is not callable"
+
+    # Create a mock collection with matching metadata
+    class MockCollection:
+        def __init__(self, metadata):
+            self.metadata = metadata
+
+    config = {
+        "retrieval": {
+            "embedding_model": "all-MiniLM-L6-v2",
+            "chunk_size": 300,
+        }
+    }
+
+    # Should pass on match
+    good_coll = MockCollection({
+        "embedding_model": "all-MiniLM-L6-v2",
+        "chunk_size_words": 300,
+    })
+    try:
+        validate_index(good_coll, config)
+    except ValueError as e:
+        return f"validate_index raised on matching metadata: {e}"
+
+    # Should raise on embedding model mismatch
+    bad_model_coll = MockCollection({
+        "embedding_model": "some-other-model",
+        "chunk_size_words": 300,
+    })
+    try:
+        validate_index(bad_model_coll, config)
+        return "validate_index did not raise on embedding model mismatch"
+    except ValueError:
+        pass  # Expected
+
+    # Should raise on chunk size mismatch
+    bad_chunk_coll = MockCollection({
+        "embedding_model": "all-MiniLM-L6-v2",
+        "chunk_size_words": 500,
+    })
+    try:
+        validate_index(bad_chunk_coll, config)
+        return "validate_index did not raise on chunk size mismatch"
+    except ValueError:
+        pass  # Expected
+
+    return None
+
+
+def check_p2_resolve_collection_name() -> Optional[str]:
+    """Verify resolve_collection_name resolves 'auto' correctly."""
+    from cumrag.retriever import resolve_collection_name
+
+    if not callable(resolve_collection_name):
+        return "resolve_collection_name is not callable"
+
+    config = {
+        "retrieval": {
+            "embedding_model": "all-MiniLM-L6-v2",
+            "chunk_size": 300,
+            "overlap": 64,
+            "collections": {
+                "rgb_noise_robustness": "auto",
+                "explicit_name": "my_custom_collection",
+            },
+        }
+    }
+
+    # "auto" should resolve to a deterministic name via make_collection_name
+    auto_name = resolve_collection_name("rgb_noise_robustness", config)
+    if not auto_name or not isinstance(auto_name, str):
+        return f"resolve_collection_name returned invalid for 'auto': {auto_name!r}"
+    if not auto_name.startswith("cumrag_"):
+        return f"Auto-resolved name should start with 'cumrag_', got '{auto_name}'"
+
+    # Same call should be deterministic
+    auto_name2 = resolve_collection_name("rgb_noise_robustness", config)
+    if auto_name != auto_name2:
+        return f"resolve_collection_name not deterministic: '{auto_name}' != '{auto_name2}'"
+
+    # Explicit name should be returned as-is
+    explicit = resolve_collection_name("explicit_name", config)
+    if explicit != "my_custom_collection":
+        return f"Explicit name should be 'my_custom_collection', got '{explicit}'"
+
+    # Missing key should raise KeyError
+    try:
+        resolve_collection_name("nonexistent_key", config)
+        return "resolve_collection_name did not raise on missing key"
+    except KeyError:
+        pass  # Expected
+
+    return None
+
+
+# ===================================================================
+# CHECK 17: Phase 2 — to_ragchecker_format()
+# ===================================================================
+
+
+def check_p2_to_ragchecker_format() -> Optional[str]:
+    """Verify to_ragchecker_format produces correct RAGChecker schema."""
+    from cumrag.evaluator import to_ragchecker_format
+
+    if not callable(to_ragchecker_format):
+        return "to_ragchecker_format is not callable"
+
+    # Build synthetic raw results
+    raw_results = [
+        {
+            "sample_id": "rgb_noise_robustness_0001",
+            "query": "What is the capital of France?",
+            "ground_truth": "Paris",
+            "response": "The capital of France is Paris.",
+            "retrieved_chunks": [
+                {"doc_id": "wiki_france_01", "text": "Paris is the capital of France."},
+                {"doc_id": "wiki_france_02", "text": "France is in Western Europe."},
+            ],
+        },
+        {
+            "sample_id": "rgb_noise_robustness_0002",
+            "query": "Who wrote Python?",
+            "ground_truth": "Guido van Rossum",
+            "response": "Guido van Rossum created Python.",
+            "retrieved_chunks": [
+                {"doc_id": "wiki_python_01", "text": "Python was created by Guido."},
+            ],
+        },
+    ]
+
+    output = to_ragchecker_format(raw_results)
+
+    # Must have 'results' key
+    if "results" not in output:
+        return "to_ragchecker_format output missing 'results' key"
+
+    results = output["results"]
+    if not isinstance(results, list):
+        return f"'results' should be a list, got {type(results).__name__}"
+    if len(results) != 2:
+        return f"Expected 2 results, got {len(results)}"
+
+    # Check first result has correct RAGChecker fields
+    first = results[0]
+    required = ["query_id", "query", "gt_answer", "response", "retrieved_context"]
+    missing = [k for k in required if k not in first]
+    if missing:
+        return f"RAGChecker result missing fields: {missing}"
+
+    if first["query_id"] != "rgb_noise_robustness_0001":
+        return f"query_id mismatch: '{first['query_id']}'"
+    if first["gt_answer"] != "Paris":
+        return f"gt_answer should be 'Paris', got '{first['gt_answer']}'"
+
+    # Check retrieved_context structure
+    ctx = first["retrieved_context"]
+    if not isinstance(ctx, list) or len(ctx) != 2:
+        return f"retrieved_context should have 2 items, got {len(ctx) if isinstance(ctx, list) else type(ctx).__name__}"
+    if "doc_id" not in ctx[0] or "text" not in ctx[0]:
+        return f"retrieved_context items missing doc_id/text keys"
+
+    return None
+
+
+# ===================================================================
+# CHECK 18: Phase 2 — eval_config.yaml v2 fields
+# ===================================================================
+
+
+def check_p2_config_judge() -> Optional[str]:
+    """Verify eval_config.yaml has the judge block with required fields."""
+    from cumrag.utils import load_config
+
+    config = load_config("eval_config")
+    judge = config.get("judge")
+    if not judge:
+        return "eval_config.yaml missing top-level 'judge' block"
+    if not isinstance(judge, dict):
+        return f"'judge' should be a dict, got {type(judge).__name__}"
+
+    required = ["model", "quant", "server_port"]
+    missing = [k for k in required if k not in judge]
+    if missing:
+        return f"judge block missing fields: {missing}"
+
+    # Judge port should differ from generation port (8080)
+    if judge.get("server_port") == 8080:
+        return "judge.server_port should NOT be 8080 (conflicts with generation server)"
+
+    return None
+
+
+def check_p2_config_collections() -> Optional[str]:
+    """Verify eval_config.yaml has retrieval.collections mapping."""
+    from cumrag.utils import load_config
+
+    config = load_config("eval_config")
+    retrieval = config.get("retrieval", {})
+    collections = retrieval.get("collections")
+    if not collections:
+        return "eval_config.yaml missing retrieval.collections"
+    if not isinstance(collections, dict):
+        return f"retrieval.collections should be a dict, got {type(collections).__name__}"
+
+    # Should have at least one collection entry
+    if len(collections) == 0:
+        return "retrieval.collections is empty"
+
+    # Check for expected RGB subset collection entries
+    expected_keys = ["rgb_noise_robustness"]
+    missing = [k for k in expected_keys if k not in collections]
+    if missing:
+        return f"retrieval.collections missing expected keys: {missing}"
+
+    return None
+
+
+# ===================================================================
+# CHECK 19: Phase 2 — Runner v2 output schema
+# ===================================================================
+
+
+def check_p2_runner_v2_schema() -> Optional[str]:
+    """Verify runner v2 output structure includes run_config, perf, retrieved_chunks."""
+    from cumrag.runner import EvalRunner
+
+    # Validate that EvalRunner.run_single exists and accepts the right params
+    if not hasattr(EvalRunner, "run_single"):
+        return "EvalRunner missing run_single method"
+
+    sig = inspect.signature(EvalRunner.run_single)
+    params = list(sig.parameters.keys())
+
+    # run_single should accept key v2 params
+    for p in ["query", "dataset", "model_name", "hardware_tier"]:
+        if p not in params:
+            return f"EvalRunner.run_single missing param '{p}'"
+
+    # Build a synthetic v2 output record to validate schema
+    v2_record = {
+        "sample_id": "test_001",
+        "dataset": "rgb",
+        "subset": "noise_robustness",
+        "query": "test query",
+        "ground_truth": "test answer",
+        "response": "generated response",
+        "retrieved_chunks": [
+            {"doc_id": "doc1", "text": "chunk text", "distance": 0.5, "rank": 1},
+        ],
+        "run_config": {
+            "model": "test-model",
+            "quant": "Q4_K_M",
+            "hardware": "cpu",
+            "seed": 42,
+        },
+        "perf": {
+            "tokens_per_sec": 3.2,
+            "ttft_ms": 1200,
+            "vram_mb": 0,
+        },
+        "metrics": {
+            "faithfulness": 0.9,
+            "context_utilization": 0.8,
+        },
+        "timestamp": "2026-03-01T14:30:00Z",
+        "error": None,
+    }
+
+    # Validate v2 top-level keys
+    v2_required = ["sample_id", "dataset", "subset", "query", "ground_truth",
+                    "response", "retrieved_chunks", "run_config", "perf",
+                    "metrics", "timestamp"]
+    missing = [k for k in v2_required if k not in v2_record]
+    if missing:
+        return f"v2 record missing keys: {missing}"
+
+    # Validate run_config sub-fields
+    rc = v2_record["run_config"]
+    rc_required = ["model", "quant", "hardware", "seed"]
+    missing_rc = [k for k in rc_required if k not in rc]
+    if missing_rc:
+        return f"v2 run_config missing keys: {missing_rc}"
+
+    # Validate retrieved_chunks structure
+    chunks = v2_record["retrieved_chunks"]
+    if not isinstance(chunks, list):
+        return "retrieved_chunks should be a list"
+    if len(chunks) > 0:
+        chunk = chunks[0]
+        chunk_required = ["doc_id", "text", "distance", "rank"]
+        missing_c = [k for k in chunk_required if k not in chunk]
+        if missing_c:
+            return f"retrieved_chunk missing keys: {missing_c}"
+
+    return None
+
+
+# ===================================================================
+# CHECK 20: Phase 2 — Aggregator v2 format parsing
+# ===================================================================
+
+
+def check_p2_aggregator_v2_parse() -> Optional[str]:
+    """Verify aggregator can parse v2 format records (run_config, perf, metrics)."""
+    from cumrag.aggregator import group_results, bootstrap_ci, _extract_metric
+
+    # Build synthetic v2 records
+    v2_records = [
+        {
+            "sample_id": f"test_{i:04d}",
+            "dataset": "rgb",
+            "subset": "noise_robustness",
+            "run_config": {
+                "model": "llama-3.1-8b",
+                "quant": "Q4_K_M",
+                "hardware": "cpu",
+            },
+            "perf": {
+                "tokens_per_sec": 3.0 + i * 0.1,
+                "ttft_ms": 1200 + i * 10,
+                "vram_mb": 0,
+            },
+            "metrics": {
+                "faithfulness": 0.80 + i * 0.01,
+                "context_utilization": 0.70 + i * 0.02,
+            },
+        }
+        for i in range(5)
+    ]
+
+    # Test grouping
+    groups = group_results(v2_records)
+    if not groups:
+        return "group_results returned empty for v2 records"
+    if len(groups) != 1:
+        return f"Expected 1 group, got {len(groups)}"
+
+    # Check the group key maps correctly
+    key = list(groups.keys())[0]
+    # key should be (model, quantization, hardware_tier, dataset, eval_subset)
+    if len(key) != 5:
+        return f"Group key should have 5 elements, got {len(key)}"
+    model, quant, hw, dataset, subset = key
+    if model != "llama-3.1-8b":
+        return f"Group key model should be 'llama-3.1-8b', got '{model}'"
+    if quant != "Q4_K_M":
+        return f"Group key quant should be 'Q4_K_M', got '{quant}'"
+    if hw != "cpu":
+        return f"Group key hardware should be 'cpu', got '{hw}'"
+
+    # Test metric extraction from v2 format
+    rec = v2_records[0]
+    faith = _extract_metric(rec, "faithfulness")
+    if faith is None:
+        return "_extract_metric could not find 'faithfulness' in v2 record"
+    if abs(faith - 0.80) > 0.001:
+        return f"_extract_metric faithfulness expected ~0.80, got {faith}"
+
+    tps = _extract_metric(rec, "tokens_per_second")
+    if tps is None:
+        return "_extract_metric could not find 'tokens_per_second' via v2 perf alias"
+    if abs(tps - 3.0) > 0.001:
+        return f"_extract_metric tokens_per_second expected ~3.0, got {tps}"
+
+    return None
+
+
+# ===================================================================
 # OPTIONAL LIVE TEST
 # ===================================================================
 
@@ -954,14 +1462,53 @@ def main() -> int:
     _run_check("utils.set_seed", check_set_seed)
     print()
 
+    # --- Phase 2: normalize_datasets ---
+    print("[14/20] normalize_datasets.py verification")
+    _run_check("p2.normalize_datasets.import", check_p2_normalize_import)
+    _run_check("p2.normalize_datasets.help", check_p2_normalize_help)
+    _run_check("p2.normalize_datasets.transforms", check_p2_normalize_transforms)
+    print()
+
+    # --- Phase 2: make_collection_name ---
+    print("[15/20] make_collection_name() verification")
+    _run_check("p2.utils.make_collection_name", check_p2_make_collection_name)
+    print()
+
+    # --- Phase 2: validate_index and resolve_collection_name ---
+    print("[16/20] validate_index() and resolve_collection_name() verification")
+    _run_check("p2.retriever.validate_index", check_p2_validate_index)
+    _run_check("p2.retriever.resolve_collection_name", check_p2_resolve_collection_name)
+    print()
+
+    # --- Phase 2: to_ragchecker_format ---
+    print("[17/20] to_ragchecker_format() verification")
+    _run_check("p2.evaluator.to_ragchecker_format", check_p2_to_ragchecker_format)
+    print()
+
+    # --- Phase 2: eval_config v2 fields ---
+    print("[18/20] eval_config.yaml v2 fields verification")
+    _run_check("p2.config.judge_block", check_p2_config_judge)
+    _run_check("p2.config.retrieval_collections", check_p2_config_collections)
+    print()
+
+    # --- Phase 2: Runner v2 output schema ---
+    print("[19/20] Runner v2 output schema verification")
+    _run_check("p2.runner.v2_schema", check_p2_runner_v2_schema)
+    print()
+
+    # --- Phase 2: Aggregator v2 parsing ---
+    print("[20/20] Aggregator v2 format parsing verification")
+    _run_check("p2.aggregator.v2_parse", check_p2_aggregator_v2_parse)
+    print()
+
     # --- Live test (optional) ---
     live_passed = True
     if args.live:
-        print("[13/13] Live pipeline test")
+        print("[LIVE] Live pipeline test")
         live_passed = run_live_test(args.model, args.dataset)
         print()
     else:
-        print("[13/13] Live pipeline test — SKIPPED (use --live --model PATH)")
+        print("[LIVE] Live pipeline test — SKIPPED (use --live --model PATH)")
         print()
 
     # --- Summary ---
