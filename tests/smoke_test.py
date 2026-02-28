@@ -75,6 +75,22 @@ def _run_check(name: str, fn: Callable[[], Optional[str]]) -> bool:
         return False
 
 
+def _run_check_or_skip(
+    name: str,
+    fn: Callable[[], Optional[str]],
+    prerequisite_path: Optional[Path],
+    skip_reason: str,
+) -> bool:
+    """Run a check if prerequisite_path exists, otherwise record SKIP.
+
+    Returns True on PASS/SKIP, False on FAIL.
+    """
+    if prerequisite_path is None or not prerequisite_path.exists():
+        _record(name, _SKIP, skip_reason)
+        return True
+    return _run_check(name, fn)
+
+
 # ===================================================================
 # CHECK 1: Import verification
 # ===================================================================
@@ -1253,6 +1269,240 @@ def check_p2_aggregator_v2_parse() -> Optional[str]:
 
 
 # ===================================================================
+# CHECK 21: Phase 3 — Script --help for new validation scripts
+# ===================================================================
+
+
+def check_p3_script_validate_datasets() -> Optional[str]:
+    return check_script_help("scripts/validate_datasets.py", "validate_datasets")
+
+
+def check_p3_script_validate_index() -> Optional[str]:
+    return check_script_help("scripts/validate_index.py", "validate_index")
+
+
+def check_p3_script_dataset_stats() -> Optional[str]:
+    return check_script_help("scripts/dataset_stats.py", "dataset_stats")
+
+
+# ===================================================================
+# CHECK 22: Phase 3 — Integration test files exist
+# ===================================================================
+
+
+def check_p3_integration_tests_exist() -> Optional[str]:
+    """Verify Phase 3 integration test files exist and are non-trivial."""
+    test_files = [
+        ("tests/test_retriever_integration.py", 100),
+        ("tests/test_runner_integration.py", 100),
+    ]
+    errors = []
+    for rel_path, min_bytes in test_files:
+        p = _PROJECT_ROOT / rel_path
+        if not p.exists():
+            errors.append(f"{rel_path} not found")
+            continue
+        size = p.stat().st_size
+        if size < min_bytes:
+            errors.append(f"{rel_path} too small ({size} bytes, expected >= {min_bytes})")
+    if errors:
+        return "; ".join(errors)
+    return None
+
+
+# ===================================================================
+# CHECK 23: Phase 3 — Normalized data existence and record counts
+# ===================================================================
+
+# Expected normalized JSONL files with (path_relative_to_project, min_records)
+_RGB_NORMALIZED_FILES = [
+    ("datasets/rgb/normalized/noise_robustness.jsonl", 100),
+    ("datasets/rgb/normalized/negative_rejection.jsonl", 100),
+    ("datasets/rgb/normalized/information_integration.jsonl", 50),
+    ("datasets/rgb/normalized/counterfactual_robustness.jsonl", 50),
+]
+
+_NQ_NORMALIZED_FILES = [
+    ("datasets/nq/normalized/test.jsonl", 100),
+]
+
+_HALUEVAL_NORMALIZED_FILES = [
+    ("datasets/halueval/normalized/qa.jsonl", 100),
+]
+
+
+def _check_normalized_files(files: list[tuple[str, int]], label: str) -> Optional[str]:
+    """Shared helper: verify a set of normalized JSONL files exist and have records."""
+    errors = []
+    for rel_path, min_records in files:
+        p = _PROJECT_ROOT / rel_path
+        if not p.exists():
+            errors.append(f"{rel_path} not found")
+            continue
+        if p.stat().st_size == 0:
+            errors.append(f"{rel_path} is empty (0 bytes)")
+            continue
+        # Count lines (= records)
+        count = 0
+        with open(p) as f:
+            for _ in f:
+                count += 1
+        if count < min_records:
+            errors.append(f"{rel_path}: {count} records < minimum {min_records}")
+    if errors:
+        return "; ".join(errors)
+    return None
+
+
+def check_p3_normalized_rgb_exists() -> Optional[str]:
+    """Verify all 4 RGB normalized JSONL files exist and are non-empty."""
+    first_file = _PROJECT_ROOT / _RGB_NORMALIZED_FILES[0][0]
+    if not first_file.parent.exists():
+        return None  # Handled as SKIP by caller
+    return _check_normalized_files(_RGB_NORMALIZED_FILES, "RGB")
+
+
+def check_p3_normalized_nq_exists() -> Optional[str]:
+    """Verify NQ test.jsonl exists and is non-empty."""
+    first_file = _PROJECT_ROOT / _NQ_NORMALIZED_FILES[0][0]
+    if not first_file.parent.exists():
+        return None  # Handled as SKIP by caller
+    return _check_normalized_files(_NQ_NORMALIZED_FILES, "NQ")
+
+
+def check_p3_normalized_halueval_exists() -> Optional[str]:
+    """Verify HaluEval qa.jsonl exists and is non-empty."""
+    first_file = _PROJECT_ROOT / _HALUEVAL_NORMALIZED_FILES[0][0]
+    if not first_file.parent.exists():
+        return None  # Handled as SKIP by caller
+    return _check_normalized_files(_HALUEVAL_NORMALIZED_FILES, "HaluEval")
+
+
+# ===================================================================
+# CHECK 24: Phase 3 — ChromaDB collections exist and are queryable
+# ===================================================================
+
+# Expected collections with minimum entry counts
+_EXPECTED_COLLECTIONS = [
+    ("cumrag_rgb_noise_robustness_300w_42df71c0", 100),
+    ("cumrag_rgb_negative_rejection_300w_bf24e598", 100),
+    ("cumrag_rgb_information_integration_300w_f6e734b7", 100),
+    ("cumrag_rgb_counterfactual_robustness_300w_6c5b9d8e", 100),
+    ("cumrag_nq_wiki_300w_1c500ba6", 100),
+    ("cumrag_halueval_300w_c255219b", 100),
+]
+
+_REQUIRED_COLLECTION_METADATA = [
+    "embedding_model", "chunk_size_words", "dataset", "cumrag_version",
+]
+
+
+def check_p3_chromadb_collections_exist() -> Optional[str]:
+    """Verify expected ChromaDB collections exist with entry counts > 0."""
+    index_dir = _PROJECT_ROOT / "index"
+    if not index_dir.exists() or not (index_dir / "chroma.sqlite3").exists():
+        return None  # Handled as SKIP by caller
+
+    try:
+        import chromadb
+        client = chromadb.PersistentClient(path=str(index_dir))
+    except Exception as e:
+        return f"Failed to open ChromaDB: {e}"
+
+    available = {c.name for c in client.list_collections()}
+    errors = []
+    for coll_name, min_entries in _EXPECTED_COLLECTIONS:
+        if coll_name not in available:
+            errors.append(f"Collection '{coll_name}' not found")
+            continue
+        coll = client.get_collection(coll_name)
+        count = coll.count()
+        if count < min_entries:
+            errors.append(f"'{coll_name}': {count} entries < minimum {min_entries}")
+
+    if errors:
+        return "; ".join(errors)
+    return None
+
+
+def check_p3_chromadb_collection_metadata() -> Optional[str]:
+    """Verify collection metadata contains required fields."""
+    index_dir = _PROJECT_ROOT / "index"
+    if not index_dir.exists() or not (index_dir / "chroma.sqlite3").exists():
+        return None  # Handled as SKIP by caller
+
+    try:
+        import chromadb
+        client = chromadb.PersistentClient(path=str(index_dir))
+    except Exception as e:
+        return f"Failed to open ChromaDB: {e}"
+
+    errors = []
+    for coll_name, _ in _EXPECTED_COLLECTIONS:
+        try:
+            coll = client.get_collection(coll_name)
+        except Exception:
+            # Collection doesn't exist -- covered by collections_exist check
+            continue
+        meta = coll.metadata or {}
+        missing = [f for f in _REQUIRED_COLLECTION_METADATA if f not in meta]
+        if missing:
+            errors.append(f"'{coll_name}' metadata missing: {missing}")
+
+    if errors:
+        return "; ".join(errors)
+    return None
+
+
+def check_p3_retriever_real_query() -> Optional[str]:
+    """Instantiate Retriever against a real ChromaDB index and run a test query."""
+    index_dir = _PROJECT_ROOT / "index"
+    if not index_dir.exists() or not (index_dir / "chroma.sqlite3").exists():
+        return None  # Handled as SKIP by caller
+
+    # Use the noise_robustness collection (largest RGB subset)
+    coll_name = "cumrag_rgb_noise_robustness_300w_42df71c0"
+    try:
+        import chromadb
+        client = chromadb.PersistentClient(path=str(index_dir))
+        available = {c.name for c in client.list_collections()}
+        if coll_name not in available:
+            return None  # Handled as SKIP by caller
+    except Exception as e:
+        return f"ChromaDB check failed: {e}"
+
+    try:
+        from cumrag.retriever import Retriever
+        r = Retriever(
+            index_dir=str(index_dir),
+            dataset="rgb",
+            collection_name=coll_name,
+        )
+
+        results = r.retrieve("What is the capital of France?", top_k=3)
+        if not results:
+            return "Retriever.retrieve() returned empty results"
+        if len(results) < 1:
+            return f"Expected at least 1 result, got {len(results)}"
+
+        # Each result should have text and distance
+        first = results[0]
+        if not isinstance(first, dict):
+            return f"Result should be dict, got {type(first).__name__}"
+        if "text" not in first:
+            return f"Result missing 'text' key, has: {list(first.keys())}"
+
+        info = r.get_collection_info()
+        if info.get("count", 0) < 1:
+            return f"Collection info reports {info.get('count')} entries"
+
+    except Exception as e:
+        return f"Retriever query failed: {type(e).__name__}: {e}"
+
+    return None
+
+
+# ===================================================================
 # OPTIONAL LIVE TEST
 # ===================================================================
 
@@ -1385,7 +1635,7 @@ def main() -> int:
     print()
 
     # --- Import checks ---
-    print("[1/13] Import verification")
+    print("[1/27] Import verification")
     _run_check("import.utils", check_import_utils)
     _run_check("import.retriever", check_import_retriever)
     _run_check("import.generator", check_import_generator)
@@ -1395,7 +1645,7 @@ def main() -> int:
     print()
 
     # --- Interface checks ---
-    print("[2/13] Module interface verification")
+    print("[2/27] Module interface verification")
     _run_check("interface.retriever", check_retriever_interface)
     _run_check("interface.generator", check_generator_interface)
     _run_check("interface.evaluator", check_evaluator_interface)
@@ -1404,36 +1654,36 @@ def main() -> int:
     print()
 
     # --- Config checks ---
-    print("[3/13] Config loading verification")
+    print("[3/27] Config loading verification")
     _run_check("config.eval_config", check_config_eval)
     _run_check("config.models", check_config_models)
     _run_check("config.hardware", check_config_hardware)
     print()
 
     # --- Prompt template ---
-    print("[4/13] Prompt template verification")
+    print("[4/27] Prompt template verification")
     _run_check("template.prompt", check_prompt_template)
     _run_check("template.format", check_format_prompt)
     print()
 
     # --- JSONL round-trip ---
-    print("[5/13] JSONL round-trip test")
+    print("[5/27] JSONL round-trip test")
     _run_check("jsonl.roundtrip", check_jsonl_roundtrip)
     print()
 
     # --- Hardware detection ---
-    print("[6/13] Hardware detection test")
+    print("[6/27] Hardware detection test")
     _run_check("hardware.meta", check_hardware_detection)
     _run_check("hardware.full", check_hardware_full)
     print()
 
     # --- Timer ---
-    print("[7/13] Timer test")
+    print("[7/27] Timer test")
     _run_check("timer.context_manager", check_timer)
     print()
 
     # --- Script --help ---
-    print("[8/13] Script --help verification")
+    print("[8/27] Script --help verification")
     _run_check("script.download_datasets", check_script_download_datasets)
     _run_check("script.download_models", check_script_download_models)
     _run_check("script.build_index", check_script_build_index)
@@ -1441,64 +1691,121 @@ def main() -> int:
     print()
 
     # --- Module CLI --help ---
-    print("[9/13] Module CLI --help verification")
+    print("[9/27] Module CLI --help verification")
     _run_check("module.retriever", check_module_retriever_help)
     _run_check("module.aggregator", check_module_aggregator_help)
     _run_check("module.utils", check_module_utils_help)
     print()
 
     # --- Bootstrap CI numeric ---
-    print("[10/13] Bootstrap CI numeric test")
+    print("[10/27] Bootstrap CI numeric test")
     _run_check("aggregator.bootstrap_ci", check_bootstrap_ci)
     print()
 
     # --- Dataclass tests ---
-    print("[11/13] EvalSample / EvalResult dataclass test")
+    print("[11/27] EvalSample / EvalResult dataclass test")
     _run_check("evaluator.dataclasses", check_eval_dataclasses)
     print()
 
     # --- Seed reproducibility ---
-    print("[12/13] Seed reproducibility test")
+    print("[12/27] Seed reproducibility test")
     _run_check("utils.set_seed", check_set_seed)
     print()
 
     # --- Phase 2: normalize_datasets ---
-    print("[14/20] normalize_datasets.py verification")
+    print("[14/27] normalize_datasets.py verification")
     _run_check("p2.normalize_datasets.import", check_p2_normalize_import)
     _run_check("p2.normalize_datasets.help", check_p2_normalize_help)
     _run_check("p2.normalize_datasets.transforms", check_p2_normalize_transforms)
     print()
 
     # --- Phase 2: make_collection_name ---
-    print("[15/20] make_collection_name() verification")
+    print("[15/27] make_collection_name() verification")
     _run_check("p2.utils.make_collection_name", check_p2_make_collection_name)
     print()
 
     # --- Phase 2: validate_index and resolve_collection_name ---
-    print("[16/20] validate_index() and resolve_collection_name() verification")
+    print("[16/27] validate_index() and resolve_collection_name() verification")
     _run_check("p2.retriever.validate_index", check_p2_validate_index)
     _run_check("p2.retriever.resolve_collection_name", check_p2_resolve_collection_name)
     print()
 
     # --- Phase 2: to_ragchecker_format ---
-    print("[17/20] to_ragchecker_format() verification")
+    print("[17/27] to_ragchecker_format() verification")
     _run_check("p2.evaluator.to_ragchecker_format", check_p2_to_ragchecker_format)
     print()
 
     # --- Phase 2: eval_config v2 fields ---
-    print("[18/20] eval_config.yaml v2 fields verification")
+    print("[18/27] eval_config.yaml v2 fields verification")
     _run_check("p2.config.judge_block", check_p2_config_judge)
     _run_check("p2.config.retrieval_collections", check_p2_config_collections)
     print()
 
     # --- Phase 2: Runner v2 output schema ---
-    print("[19/20] Runner v2 output schema verification")
+    print("[19/27] Runner v2 output schema verification")
     _run_check("p2.runner.v2_schema", check_p2_runner_v2_schema)
     print()
 
     # --- Phase 2: Aggregator v2 parsing ---
-    print("[20/20] Aggregator v2 format parsing verification")
+    print("[20/27] Aggregator v2 format parsing verification")
     _run_check("p2.aggregator.v2_parse", check_p2_aggregator_v2_parse)
+    print()
+
+    # --- Phase 3: Script --help for new validation scripts ---
+    print("[21/27] Phase 3 validation script --help verification")
+    _run_check("p3.script.validate_datasets", check_p3_script_validate_datasets)
+    _run_check("p3.script.validate_index", check_p3_script_validate_index)
+    _run_check("p3.script.dataset_stats", check_p3_script_dataset_stats)
+    print()
+
+    # --- Phase 3: Integration test files ---
+    print("[22/27] Phase 3 integration test files exist")
+    _run_check("p3.integration_tests.exist", check_p3_integration_tests_exist)
+    print()
+
+    # --- Phase 3: Normalized data existence ---
+    print("[23/27] Phase 3 normalized data validation")
+    _run_check_or_skip(
+        "p3.data.normalized_rgb",
+        check_p3_normalized_rgb_exists,
+        _PROJECT_ROOT / "datasets" / "rgb" / "normalized",
+        "RGB normalized dir not found (data not downloaded)",
+    )
+    _run_check_or_skip(
+        "p3.data.normalized_nq",
+        check_p3_normalized_nq_exists,
+        _PROJECT_ROOT / "datasets" / "nq" / "normalized",
+        "NQ normalized dir not found (data not downloaded)",
+    )
+    _run_check_or_skip(
+        "p3.data.normalized_halueval",
+        check_p3_normalized_halueval_exists,
+        _PROJECT_ROOT / "datasets" / "halueval" / "normalized",
+        "HaluEval normalized dir not found (data not downloaded)",
+    )
+    print()
+
+    # --- Phase 3: ChromaDB collections ---
+    print("[24/27] Phase 3 ChromaDB collection validation")
+    _chromadb_available = (_PROJECT_ROOT / "index" / "chroma.sqlite3").exists()
+    _run_check_or_skip(
+        "p3.chromadb.collections_exist",
+        check_p3_chromadb_collections_exist,
+        _PROJECT_ROOT / "index" / "chroma.sqlite3" if _chromadb_available else None,
+        "ChromaDB index not found (not built yet)",
+    )
+    _run_check_or_skip(
+        "p3.chromadb.collection_metadata",
+        check_p3_chromadb_collection_metadata,
+        _PROJECT_ROOT / "index" / "chroma.sqlite3" if _chromadb_available else None,
+        "ChromaDB index not found (not built yet)",
+    )
+    _run_check_or_skip(
+        "p3.chromadb.retriever_query",
+        check_p3_retriever_real_query,
+        _PROJECT_ROOT / "index" / "chroma.sqlite3" if _chromadb_available else None,
+        "ChromaDB index not found (not built yet)",
+    )
     print()
 
     # --- Live test (optional) ---
