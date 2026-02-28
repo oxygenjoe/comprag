@@ -47,7 +47,6 @@ QUALITY_METRICS = (
 
 PERFORMANCE_METRICS = (
     "tokens_per_second",
-    "time_to_first_token_ms",
     "ttft_ms",
     "vram_usage_mb",
     "gpu_temp",
@@ -61,9 +60,8 @@ ALL_METRICS = QUALITY_METRICS + PERFORMANCE_METRICS
 # metric.
 _PERF_ALIASES: dict[str, str] = {
     "tokens_per_sec": "tokens_per_second",
-    "ttft_ms": "ttft_ms",
+    "time_to_first_token_ms": "ttft_ms",
     "vram_mb": "vram_usage_mb",
-    "gpu_temp": "gpu_temp",
 }
 
 # Reverse map: canonical -> set of aliases (used during extraction)

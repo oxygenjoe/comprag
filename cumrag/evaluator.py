@@ -285,7 +285,12 @@ def _get_judge_embeddings() -> Any:
                 "langchain-huggingface or langchain-community required: "
                 "pip install langchain-huggingface"
             )
-    return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    try:
+        config = load_config("eval_config")
+        model_name = config["retrieval"]["embedding_model"]
+    except (FileNotFoundError, KeyError):
+        model_name = "all-MiniLM-L6-v2"
+    return HuggingFaceEmbeddings(model_name=model_name)
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +421,7 @@ def to_ragchecker_format(raw_results: list[dict]) -> dict:
                 ],
             }
             for entry in raw_results
+            if entry.get("response") is not None and entry.get("error") is None
         ]
     }
 

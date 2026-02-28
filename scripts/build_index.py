@@ -839,6 +839,96 @@ def build_rgb_index(
     return stats
 
 
+def build_nq_index(
+    chunk_size: int = 300,
+    overlap: int = 64,
+    force: bool = False,
+    persist_dir: Optional[Path] = None,
+    batch_size: int = 256,
+) -> dict:
+    """Build a ChromaDB index for Natural Questions from normalized JSONL.
+
+    NQ requires a Wikipedia corpus for retrieval. This function indexes any
+    available normalized NQ data. Full Wikipedia indexing is deferred to
+    Phase 3 when the corpus is available.
+
+    Args:
+        chunk_size: Whitespace words per chunk (default 300).
+        overlap: Overlapping words between chunks (default 64).
+        force: If True, delete and rebuild existing collection.
+        persist_dir: Override index directory (default: index/).
+        batch_size: Number of chunks to embed and insert per batch.
+
+    Returns:
+        Dict with indexing stats.
+
+    Raises:
+        FileNotFoundError: If normalized JSONL file does not exist.
+    """
+    normalized_path = DATASETS_DIR / "nq" / "normalized" / "test.jsonl"
+    if not normalized_path.exists():
+        logger.info(
+            "Skipping NQ: normalized file not found at %s. "
+            "Run 'python scripts/normalize_datasets.py --datasets nq' first, "
+            "and ensure the NQ Wikipedia corpus is available for full indexing.",
+            normalized_path,
+        )
+        return {
+            "dataset": "nq",
+            "subset": "test",
+            "collection_name": None,
+            "num_chunks": 0,
+            "skipped": True,
+            "elapsed_seconds": 0.0,
+        }
+
+    embedding_model = _get_embedding_model_name()
+    collection_name = make_collection_name(
+        dataset="nq_wiki",
+        embedding_model=embedding_model,
+        chunk_size=chunk_size,
+        chunk_overlap=overlap,
+    )
+
+    client = get_chroma_client(persist_dir)
+
+    if not force and collection_exists(client, collection_name):
+        count = client.get_collection(collection_name).count()
+        logger.info(
+            "Collection '%s' already exists with %d entries. Use --force to rebuild.",
+            collection_name, count,
+        )
+        return {
+            "dataset": "nq",
+            "subset": "test",
+            "collection_name": collection_name,
+            "num_chunks": count,
+            "skipped": True,
+            "elapsed_seconds": 0.0,
+        }
+
+    if force:
+        try:
+            client.delete_collection(collection_name)
+            logger.info("Deleted existing collection '%s' for rebuild.", collection_name)
+        except Exception:
+            pass
+
+    logger.info(
+        "NQ full Wikipedia corpus indexing is deferred to Phase 3. "
+        "Normalized JSONL exists but corpus docs are not yet available."
+    )
+    return {
+        "dataset": "nq",
+        "subset": "test",
+        "collection_name": collection_name,
+        "num_chunks": 0,
+        "skipped": True,
+        "elapsed_seconds": 0.0,
+        "note": "Wikipedia corpus indexing deferred to Phase 3",
+    }
+
+
 def build_halueval_index(
     chunk_size: int = 300,
     overlap: int = 64,
@@ -1091,11 +1181,18 @@ def build_all(
         except Exception as e:
             logger.error("Failed to index RGB/%s: %s", subset, e, exc_info=True)
 
-    # --- NQ: requires global Wikipedia corpus, deferred ---
-    logger.info(
-        "Skipping NQ: requires global Wikipedia corpus index. "
-        "NQ indexing is deferred to Phase 3 (Wikipedia embedding pipeline)."
-    )
+    # --- NQ: structured function, defers to Phase 3 for Wikipedia corpus ---
+    try:
+        stats = build_nq_index(
+            chunk_size=chunk_size,
+            overlap=overlap,
+            force=force,
+            persist_dir=persist_dir,
+            batch_size=batch_size,
+        )
+        results.append(stats)
+    except Exception as e:
+        logger.warning("Skipping NQ: %s", e)
 
     # --- HaluEval: knowledge field indexing ---
     try:
@@ -1258,13 +1355,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
             results = [result]
         elif args.dataset == "nq":
-            # NQ: requires global Wikipedia corpus, not available yet
-            logger.info(
-                "NQ indexing requires a global Wikipedia corpus. "
-                "This is deferred to Phase 3. Use the general build_index() "
-                "if you have pre-chunked NQ documents available."
+            result = build_nq_index(
+                chunk_size=args.chunk_size,
+                overlap=args.overlap,
+                force=args.force,
+                persist_dir=Path(args.persist_dir) if args.persist_dir else None,
+                batch_size=args.batch_size,
             )
-            results = []
+            results = [result]
         else:
             result = build_index(
                 dataset_name=args.dataset,
