@@ -452,3 +452,9 @@ class TestPipelineSummaryReport:
         """main() returns 1 for invalid step names."""
         exit_code = main(["--steps", "bogus_step"])
         assert exit_code == 1
+
+    def test_help_exits_cleanly(self):
+        """--help exits with SystemExit(0)."""
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--help"])
+        assert exc_info.value.code == 0

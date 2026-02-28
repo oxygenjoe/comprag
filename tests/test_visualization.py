@@ -260,7 +260,9 @@ class TestChartGeneration:
         for p in generated:
             assert p.exists()
             assert p.suffix == ".png"
-            assert p.stat().st_size > 0
+            assert p.stat().st_size > 1024, (
+                f"Chart {p.name} is too small ({p.stat().st_size} bytes, expected >1KB)"
+            )
 
     def test_all_chart_functions_registered(self):
         """ALL_CHART_FUNCTIONS has exactly 6 entries."""
