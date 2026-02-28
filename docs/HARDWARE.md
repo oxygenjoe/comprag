@@ -456,3 +456,90 @@ the 19.3M chunk extraction pipeline to fix.
 Python 3.12 breaks the `WikiExtractor` package's regex patterns (changes to `re` module
 escape handling). This is why we wrote custom `wiki_extract.py` and `wiki_chunk.py` scripts
 instead of depending on WikiExtractor. Do not attempt to use WikiExtractor on Python 3.12+.
+
+---
+
+## Hardware Tier Detection and Logging
+
+The eval harness automatically detects which hardware tier it is running on and logs this
+metadata into every JSONL result record. This is handled by `scripts/profile_hardware.py`
+and the underlying detection utilities in `cumrag/utils.py`.
+
+### How It Works
+
+1. **Detection** (`profile_hardware()`): Probes the system for GPU model (via `nvidia-smi`
+   or `rocm-smi`), CPU model (via `lscpu`), RAM (via `/proc/meminfo`), VRAM, driver
+   versions, CUDA/ROCm versions, OS info, kernel version, Python version, and llama.cpp
+   installation status.
+
+2. **Tier Matching** (`match_tier()`): Compares detected hardware against the tier
+   definitions in `config/hardware.yaml` using a priority-ordered matching strategy:
+   - **GPU name substring match**: checks for `v100`, `mi25`/`vega`, `1660 super`/`1660s`,
+     `fpga`/`inspur` in the detected GPU model string.
+   - **CPU + Optane match**: if the CPU matches `e5-2667` and Optane DAX mounts are
+     detected in `/proc/mounts` (entries containing `pmem` or `optane`), matches the
+     `optane` tier. Without Optane mounts, falls back to `cpu` tier.
+   - **Generic fallback**: if a GPU is present but doesn't match any known tier, attempts
+     substring matching against each tier's `display_name`. Final fallback is the `cpu` tier.
+   - Returns a `(tier_id, tier_definition)` tuple.
+
+3. **Logging**: The `hardware_meta` dict is embedded in every JSONL eval result record:
+   ```json
+   {
+     "gpu": "NVIDIA V100 SXM2 32GB",
+     "driver": "550.127.05",
+     "framework": "CUDA 12.4 / llama.cpp b4217",
+     "os": "Ubuntu 24.04 LTS"
+   }
+   ```
+   This allows post-hoc filtering and grouping of results by hardware tier during
+   analysis and visualization.
+
+### CLI Usage
+
+```bash
+# Pretty-print detected hardware profile and matched tier
+python scripts/profile_hardware.py
+
+# JSON output (pipe-friendly, suitable for automation)
+python scripts/profile_hardware.py --json
+
+# Write detected specs back to config/hardware.yaml
+python scripts/profile_hardware.py --update-config
+
+# Both JSON output and config update
+python scripts/profile_hardware.py --json --update-config
+
+# Use a custom hardware.yaml path
+python scripts/profile_hardware.py --config /path/to/hardware.yaml
+```
+
+### Importable API
+
+```python
+from scripts.profile_hardware import profile_hardware, match_tier
+
+# Detect all hardware specs
+profile = profile_hardware()
+# Returns dict with keys: gpu_model, gpu_vram_mb, gpu_driver_version,
+# gpu_framework, cpu_model, cpu_cores, cpu_threads, ram_total_mb,
+# os_version, kernel_version, python_version, llama_cpp_version,
+# hardware_meta
+
+# Match to a tier from hardware.yaml
+tier_id, tier_def = match_tier(profile)
+# tier_id: one of 'v100', 'mi25', '1660s', 'fpga', 'cpu', 'optane', 'unknown'
+# tier_def: the full tier definition dict from hardware.yaml
+```
+
+### Config Update
+
+When run with `--update-config`, the script writes detected values back into
+`config/hardware.yaml` for the matched tier, including:
+- Detected VRAM and RAM values
+- CPU model string
+- Software stack (framework version, llama.cpp version)
+- Status set to `available`
+- `detected_at` UTC timestamp
+
+This enables a workflow where each machine self-documents its capabilities on first run.
