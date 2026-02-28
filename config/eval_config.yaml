@@ -1,5 +1,5 @@
 # CUMRAG Evaluation Configuration
-# Reference: cumrag-spec.md
+# Reference: cumrag-spec.md, cumrag-claude-code-guide-v2.md
 # All parameters locked across runs for reproducibility.
 
 # Dataset paths (relative to project root)
@@ -22,10 +22,18 @@ retrieval:
   embedding_model: "all-MiniLM-L6-v2"
   embedding_dim: 384
   vector_store: "chromadb"
-  index_path: "index/"
+  # index_path: "index/"  # DEPRECATED: renamed to index_dir in v2
+  index_dir: "index/"                  # ChromaDB persist directory
   chunk_size: 300  # Whitespace words, not BPE tokens. 300 words ≈ 400-500 BPE tokens.
   overlap: 64
   top_k: 5
+  collections:
+    rgb_noise_robustness: "auto"           # "auto" = computed from params at runtime
+    rgb_negative_rejection: "auto"
+    rgb_information_integration: "auto"
+    rgb_counterfactual_robustness: "auto"
+    nq_wiki: "auto"
+    halueval: "auto"
 
 # Generation parameters (locked across all runs)
 generation:
@@ -51,7 +59,18 @@ evaluation:
     - context_utilization
     - self_knowledge
     - noise_sensitivity
-  judge_model: "claude"  # or "gpt-4"
+  # judge_model removed in v2 — see top-level 'judge' block below
+
+# Judge model for RAGAS/RAGChecker scoring (local llama.cpp, NOT cloud API)
+judge:
+  model: "qwen2.5-14b-instruct"
+  quant: "Q4_K_M"
+  server_port: 8081          # DIFFERENT from generation server (8080)
+  context_length: 8192       # Judge doesn't need full 32k — claims are short
+  max_tokens: 1024
+  temperature: 0.0
+  # When judge model == eval model, override:
+  self_judge_quant: "Q8_0"   # Use different quant to avoid circular eval
 
 # Statistical requirements
 statistics:
@@ -63,6 +82,7 @@ statistics:
 # Output paths (relative to project root)
 output:
   raw_results: "results/raw/"
+  scored_results: "results/scored/"
   aggregated_results: "results/aggregated/"
   figures: "results/figures/"
   format: "jsonl"
