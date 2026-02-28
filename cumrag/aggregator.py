@@ -4,6 +4,9 @@ Reads raw JSONL eval results, groups by (model x quantization x hardware_tier
 x dataset x eval_subset), computes 95% bootstrap CIs (1000 resamples), and
 outputs summary tables in CSV, Markdown, and JSONL formats.
 
+Supports both v1 (flat top-level fields) and v2 (nested run_config/perf/metrics)
+raw JSONL input schemas.  Output defaults to the v2 aggregated schema.
+
 Importable as module; also runnable as CLI via:
     python -m cumrag.aggregator --input results/raw/ --output results/aggregated/
 
@@ -16,13 +19,14 @@ import csv
 import json
 import sys
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Union
 
 import numpy as np
 from scipy import stats as scipy_stats
 
-from cumrag.utils import get_logger, read_jsonl
+from cumrag.utils import get_hardware_meta, get_logger, read_jsonl
 
 log = get_logger("cumrag.aggregator")
 
@@ -44,10 +48,35 @@ QUALITY_METRICS = (
 PERFORMANCE_METRICS = (
     "tokens_per_second",
     "time_to_first_token_ms",
+    "ttft_ms",
     "vram_usage_mb",
+    "gpu_temp",
 )
 
 ALL_METRICS = QUALITY_METRICS + PERFORMANCE_METRICS
+
+# v2 field-name aliases: v2_name -> canonical metric name.
+# The runner's perf block uses shortened names; we map them to our canonical
+# metric names so both old and new records contribute to the same aggregated
+# metric.
+_PERF_ALIASES: dict[str, str] = {
+    "tokens_per_sec": "tokens_per_second",
+    "ttft_ms": "ttft_ms",
+    "vram_mb": "vram_usage_mb",
+    "gpu_temp": "gpu_temp",
+}
+
+# Reverse map: canonical -> set of aliases (used during extraction)
+_CANONICAL_TO_ALIASES: dict[str, list[str]] = {}
+for _alias, _canon in _PERF_ALIASES.items():
+    _CANONICAL_TO_ALIASES.setdefault(_canon, []).append(_alias)
+
+# v2 group-key mapping: run_config field name -> canonical GROUP_KEYS name
+_GROUP_KEY_MAP: dict[str, str] = {
+    "model": "model",
+    "quant": "quantization",
+    "hardware": "hardware_tier",
+}
 
 MIN_RUNS = 3
 BOOTSTRAP_RESAMPLES = 1000
@@ -106,39 +135,93 @@ def load_results(input_path: Union[str, Path]) -> list[dict]:
 def _extract_group_key(record: dict) -> tuple:
     """Extract the grouping key tuple from a result record.
 
+    Handles both v1 (flat top-level) and v2 (nested run_config) formats:
+      - v2: run_config.model, run_config.quant -> quantization,
+            run_config.hardware -> hardware_tier
+      - v2: subset -> eval_subset
+      - v1 fallback: top-level model, quantization, hardware_tier, etc.
+
     Returns:
         Tuple of (model, quantization, hardware_tier, dataset, eval_subset).
         Missing fields default to 'unknown'.
     """
-    return tuple(record.get(k, "unknown") for k in GROUP_KEYS)
+    run_config = record.get("run_config", {}) or {}
+
+    values: list[str] = []
+    for gk in GROUP_KEYS:
+        # 1. Check run_config using the reverse map
+        found = False
+        for rc_field, canon in _GROUP_KEY_MAP.items():
+            if canon == gk and rc_field in run_config:
+                val = run_config[rc_field]
+                values.append(str(val) if val else "unknown")
+                found = True
+                break
+
+        if found:
+            continue
+
+        # 2. v2 uses "subset" for eval_subset
+        if gk == "eval_subset" and "subset" in record:
+            val = record["subset"]
+            values.append(str(val) if val else "unknown")
+            continue
+
+        # 3. Top-level fallback (v1 format)
+        val = record.get(gk, "unknown")
+        values.append(str(val) if val else "unknown")
+
+    return tuple(values)
+
+
+def _try_float(val: object) -> Optional[float]:
+    """Attempt to convert a value to float; return None on failure."""
+    if val is None:
+        return None
+    try:
+        return float(val)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _extract_metric(record: dict, metric_name: str) -> Optional[float]:
     """Extract a metric value from a record.
 
-    Checks both top-level and nested 'metrics' dict.
+    Search order (first non-None wins):
+      1. perf dict (v2 performance block)
+      2. eval_metrics dict
+      3. eval_spec_metrics dict
+      4. metrics dict (v2 quality metrics / v1 nested metrics)
+      5. top-level field (v1 flat format)
+
+    Within each dict, the canonical metric_name is tried first, then any
+    known aliases (e.g. ``tokens_per_sec`` for ``tokens_per_second``).
 
     Returns:
         Float value or None if not present or not numeric.
     """
-    # Try nested metrics dict first (spec format)
-    metrics = record.get("metrics", {})
-    if isinstance(metrics, dict) and metric_name in metrics:
-        val = metrics[metric_name]
-        if val is not None:
-            try:
-                return float(val)
-            except (TypeError, ValueError):
-                return None
+    # Build the list of names to search: canonical + aliases
+    names_to_try = [metric_name] + _CANONICAL_TO_ALIASES.get(metric_name, [])
 
-    # Try top-level (alternative flat format)
-    if metric_name in record:
-        val = record[metric_name]
-        if val is not None:
-            try:
-                return float(val)
-            except (TypeError, ValueError):
-                return None
+    # Ordered list of nested dicts to probe
+    nested_dicts = ("perf", "eval_metrics", "eval_spec_metrics", "metrics")
+
+    for dict_key in nested_dicts:
+        nested = record.get(dict_key)
+        if not isinstance(nested, dict):
+            continue
+        for name in names_to_try:
+            if name in nested:
+                result = _try_float(nested[name])
+                if result is not None:
+                    return result
+
+    # Top-level fallback (v1 flat format)
+    for name in names_to_try:
+        if name in record:
+            result = _try_float(record[name])
+            if result is not None:
+                return result
 
     return None
 
@@ -482,9 +565,26 @@ def write_jsonl_summary(
     aggregated: dict[tuple, dict],
     output_path: Union[str, Path],
 ) -> Path:
-    """Write aggregated results as JSONL, one record per group.
+    """Write aggregated results as v2 JSONL, one record per group.
 
-    Each record contains group keys, n_runs, metrics with CIs, and warnings.
+    Each record matches the v2 aggregated output schema::
+
+        {
+          "timestamp": "2026-03-01T14:30:00Z",
+          "model": "...",
+          "quantization": "...",
+          "hardware_tier": "...",
+          "dataset": "...",
+          "eval_subset": "...",
+          "n_runs": 5,
+          "metrics": { "<name>": <mean_float>, ... },
+          "metrics_ci": { "<name>": { "mean", "ci_low", "ci_high", ... }, ... },
+          "hardware_meta": { "gpu", "driver", "framework", "os" },
+          "warnings": [...]
+        }
+
+    The ``metrics`` block contains bare mean values for quick consumption;
+    ``metrics_ci`` holds the full bootstrap CI detail.
 
     Args:
         aggregated: Output from aggregate_all().
@@ -496,19 +596,24 @@ def write_jsonl_summary(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    hw_meta = get_hardware_meta()
+
     count = 0
     with open(output_path, "w", encoding="utf-8") as f:
         for key, agg in sorted(aggregated.items()):
-            record: dict = {}
-            for gk, gv in zip(GROUP_KEYS, key):
-                record[gk] = gv
-            record["n_runs"] = agg["n_runs"]
-            record["metrics"] = {}
+            key_dict = dict(zip(GROUP_KEYS, key))
+
+            # v2 flat metrics block: metric_name -> mean value
+            flat_metrics: dict[str, object] = {}
+            # v2 detailed CI block
+            ci_metrics: dict[str, dict] = {}
 
             for metric_name in ALL_METRICS:
                 ci = agg["metrics"].get(metric_name)
                 if ci is not None:
-                    record["metrics"][metric_name] = {
+                    flat_metrics[metric_name] = round(ci["mean"], 6)
+                    ci_metrics[metric_name] = {
                         "mean": round(ci["mean"], 6),
                         "ci_low": round(ci["ci_low"], 6),
                         "ci_high": round(ci["ci_high"], 6),
@@ -517,7 +622,20 @@ def write_jsonl_summary(
                         "flagged": ci["flagged"],
                     }
 
-            record["warnings"] = agg.get("warnings", [])
+            record: dict = {
+                "timestamp": timestamp,
+                "model": key_dict["model"],
+                "quantization": key_dict["quantization"],
+                "hardware_tier": key_dict["hardware_tier"],
+                "dataset": key_dict["dataset"],
+                "eval_subset": key_dict["eval_subset"],
+                "n_runs": agg["n_runs"],
+                "metrics": flat_metrics,
+                "metrics_ci": ci_metrics,
+                "hardware_meta": hw_meta,
+                "warnings": agg.get("warnings", []),
+            }
+
             line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
             f.write(line + "\n")
             count += 1
