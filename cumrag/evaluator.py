@@ -5,6 +5,11 @@ self-knowledge, noise sensitivity, and answer relevancy. Wraps both
 RAGAS and RAGChecker frameworks with graceful degradation — if one
 framework fails, the other's results are still returned.
 
+Judge model runs locally via llama.cpp on port 8081 (separate from the
+generation server on 8080). Both servers cannot run simultaneously on
+V100 due to VRAM limits — the scoring pipeline is strictly sequential:
+stop gen server -> start judge server -> score -> stop judge server.
+
 Importable as module; CLI mode to evaluate a single JSONL file:
     python -m cumrag.evaluator --input results/raw/run.jsonl --output results/raw/scored.jsonl
 
@@ -32,6 +37,11 @@ from cumrag.utils import (
 )
 
 logger = get_logger("cumrag.evaluator")
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_DEFAULT_MODELS_DIR = _PROJECT_ROOT / "models"
+_JUDGE_PORT = 8081
+_GEN_PORT = 8080
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -121,69 +131,142 @@ class EvalResult:
 
 
 # ---------------------------------------------------------------------------
-# Judge model configuration
+# Judge model configuration — local llama.cpp on port 8081
 # ---------------------------------------------------------------------------
 
 
-def _get_judge_llm(judge_model: str = "claude") -> Any:
-    """Instantiate the LLM judge for RAGAS evaluation.
-
-    Args:
-        judge_model: One of 'claude', 'gpt-4', or 'gpt-4o'. Reads API keys
-            from environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY).
+def _load_judge_config() -> dict[str, Any]:
+    """Load judge configuration from eval_config.yaml.
 
     Returns:
-        A LangChain LLM instance suitable for RAGAS.
+        Judge config dict with keys: model, quant, server_port,
+        context_length, max_tokens, temperature, self_judge_quant.
 
     Raises:
-        ValueError: If judge_model is unsupported.
-        ImportError: If required LangChain provider package is missing.
+        FileNotFoundError: If eval_config.yaml not found.
+        KeyError: If 'judge' block missing from config.
     """
-    if judge_model in ("claude", "claude-3", "claude-sonnet"):
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise ValueError(
-                "ANTHROPIC_API_KEY environment variable required for Claude judge"
+    config = load_config("eval_config")
+    judge = config.get("judge")
+    if not judge:
+        raise KeyError(
+            "Missing 'judge' block in eval_config.yaml. "
+            "Required fields: model, quant, server_port."
+        )
+    return judge
+
+
+def _resolve_judge_gguf(
+    judge_config: dict[str, Any],
+    eval_model_path: Optional[str] = None,
+    models_dir: Optional[Union[str, Path]] = None,
+) -> Path:
+    """Resolve the judge GGUF file path from config.
+
+    Handles self-judge quant swap: when the judge model matches the eval
+    model, use self_judge_quant (Q8_0) to avoid circular evaluation with
+    the same weights.
+
+    Args:
+        judge_config: Judge config dict from eval_config.yaml.
+        eval_model_path: Path to the generation model GGUF (for self-judge
+            detection). If None, no self-judge swap is attempted.
+        models_dir: Override models directory. Defaults to <project>/models/.
+
+    Returns:
+        Path to the judge GGUF file.
+
+    Raises:
+        FileNotFoundError: If the resolved GGUF file does not exist.
+    """
+    base = Path(models_dir) if models_dir else _DEFAULT_MODELS_DIR
+    model = judge_config["model"]
+    quant = judge_config["quant"]
+
+    # Self-judge detection: if judge model name matches eval model, swap quant
+    if eval_model_path:
+        eval_stem = Path(eval_model_path).stem.lower()
+        judge_stem = model.lower()
+        # Check if the eval model filename contains the judge model name
+        if judge_stem in eval_stem:
+            self_quant = judge_config.get("self_judge_quant")
+            if self_quant:
+                logger.info(
+                    "Self-judge detected: judge model '%s' matches eval model '%s'. "
+                    "Swapping quant %s -> %s",
+                    model, eval_model_path, quant, self_quant,
+                )
+                quant = self_quant
+
+    # Build GGUF filename: {Model}-{Quant}.gguf
+    # Capitalize model parts to match HuggingFace naming convention
+    # e.g. "qwen2.5-14b-instruct" -> "Qwen2.5-14B-Instruct"
+    parts = model.split("-")
+    capitalized = []
+    for p in parts:
+        if p.lower() in ("instruct", "chat", "base", "coder"):
+            capitalized.append(p.capitalize())
+        elif p.upper() == p and len(p) <= 4:
+            capitalized.append(p.upper())
+        elif p.lower().endswith("b") and p[:-1].replace(".", "").isdigit():
+            # Size like "14b" -> "14B"
+            capitalized.append(p[:-1] + "B")
+        else:
+            capitalized.append(
+                p.capitalize() if not any(c.isupper() for c in p) else p
             )
-        try:
-            from langchain_anthropic import ChatAnthropic
-        except ImportError:
-            raise ImportError(
-                "langchain-anthropic required for Claude judge: "
-                "pip install langchain-anthropic"
-            )
-        return ChatAnthropic(
-            model="claude-sonnet-4-20250514",
-            anthropic_api_key=api_key,
-            temperature=0.0,
-            max_tokens=1024,
+    model_name = "-".join(capitalized)
+    quant_upper = quant.upper().replace("-", "_")
+    filename = f"{model_name}-{quant_upper}.gguf"
+
+    gguf_path = base / filename
+    if not gguf_path.exists():
+        # Try case-insensitive search as fallback
+        for f in base.iterdir():
+            if f.name.lower() == filename.lower() and f.suffix == ".gguf":
+                logger.info(
+                    "Found judge GGUF via case-insensitive match: %s", f.name
+                )
+                return f
+        raise FileNotFoundError(
+            f"Judge GGUF not found: {gguf_path}\n"
+            f"Expected filename: {filename}\n"
+            f"Models dir: {base}\n"
+            f"Available GGUFs: {[f.name for f in base.glob('*.gguf')]}"
         )
 
-    elif judge_model in ("gpt-4", "gpt-4o", "openai"):
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError(
-                "OPENAI_API_KEY environment variable required for GPT-4 judge"
-            )
-        try:
-            from langchain_openai import ChatOpenAI
-        except ImportError:
-            raise ImportError(
-                "langchain-openai required for GPT-4 judge: "
-                "pip install langchain-openai"
-            )
-        model_name = "gpt-4o" if judge_model in ("gpt-4o", "openai") else "gpt-4"
-        return ChatOpenAI(
-            model=model_name,
-            openai_api_key=api_key,
-            temperature=0.0,
-            max_tokens=1024,
+    return gguf_path
+
+
+def _get_judge_llm(judge_config: dict[str, Any]) -> Any:
+    """Instantiate the LLM judge for RAGAS evaluation via local llama.cpp.
+
+    Uses LangChain's ChatOpenAI pointed at the local llama.cpp judge server
+    on port 8081. This is the ONLY place LangChain enters the pipeline.
+
+    Args:
+        judge_config: Judge config dict from eval_config.yaml.
+
+    Returns:
+        A LangChain ChatOpenAI instance pointed at localhost:8081.
+    """
+    port = judge_config.get("server_port", _JUDGE_PORT)
+
+    try:
+        from langchain_openai import ChatOpenAI
+    except ImportError:
+        raise ImportError(
+            "langchain-openai required for local judge LLM: "
+            "pip install langchain-openai"
         )
 
-    else:
-        raise ValueError(
-            f"Unsupported judge model: {judge_model!r}. Use 'claude' or 'gpt-4'."
-        )
+    return ChatOpenAI(
+        base_url=f"http://localhost:{port}/v1",
+        api_key="not-needed",
+        model=judge_config["model"],
+        temperature=judge_config.get("temperature", 0.0),
+        max_tokens=judge_config.get("max_tokens", 1024),
+    )
 
 
 def _get_judge_embeddings() -> Any:
@@ -206,6 +289,138 @@ def _get_judge_embeddings() -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Judge server lifecycle
+# ---------------------------------------------------------------------------
+
+
+def start_judge_server(
+    judge_config: dict[str, Any],
+    eval_model_path: Optional[str] = None,
+    models_dir: Optional[Union[str, Path]] = None,
+) -> "LlamaServer":
+    """Start the llama.cpp judge server on port 8081.
+
+    Resolves the judge GGUF from config, handles self-judge quant swap,
+    starts the server, and waits for /health 200.
+
+    Args:
+        judge_config: Judge config dict from eval_config.yaml.
+        eval_model_path: Path to generation model GGUF (for self-judge detection).
+        models_dir: Override models directory.
+
+    Returns:
+        Running LlamaServer instance (caller must call stop()).
+
+    Raises:
+        FileNotFoundError: If judge GGUF or server binary not found.
+        TimeoutError: If judge server doesn't become ready.
+        RuntimeError: If server fails to start.
+    """
+    from cumrag.generator import LlamaServer
+
+    gguf_path = _resolve_judge_gguf(
+        judge_config,
+        eval_model_path=eval_model_path,
+        models_dir=models_dir,
+    )
+    port = judge_config.get("server_port", _JUDGE_PORT)
+    ctx_len = judge_config.get("context_length", 8192)
+
+    logger.info(
+        "Starting judge server: model=%s port=%d ctx=%d",
+        gguf_path.name, port, ctx_len,
+    )
+
+    server = LlamaServer(port=port)
+    server.start(
+        model_path=gguf_path,
+        port=port,
+        n_gpu_layers=-1,
+        ctx_size=ctx_len,
+    )
+
+    logger.info("Waiting for judge server readiness...")
+    server.wait_ready(timeout=180.0)
+    logger.info("Judge server ready on port %d", port)
+
+    return server
+
+
+def stop_judge_server(server: "LlamaServer") -> None:
+    """Stop the judge server cleanly.
+
+    Args:
+        server: LlamaServer instance to stop.
+    """
+    if server is not None:
+        logger.info("Stopping judge server...")
+        server.stop()
+        logger.info("Judge server stopped")
+
+
+def stop_generation_server(
+    gen_server: Optional["LlamaServer"] = None,
+) -> None:
+    """Stop the generation server (port 8080) if running.
+
+    Must be called before starting the judge server to free VRAM.
+    Both servers cannot run simultaneously on V100.
+
+    Args:
+        gen_server: LlamaServer instance for generation. If None,
+            attempts to kill any orphaned llama-server on port 8080.
+    """
+    if gen_server is not None:
+        logger.info("Stopping generation server to free VRAM for judge...")
+        gen_server.stop()
+        logger.info("Generation server stopped")
+    else:
+        # Try to clean up orphaned process on gen port
+        from cumrag.generator import LlamaServer
+        temp = LlamaServer(port=_GEN_PORT)
+        temp._check_port_available(_GEN_PORT)
+
+
+# ---------------------------------------------------------------------------
+# RAGChecker input format bridge
+# ---------------------------------------------------------------------------
+
+
+def to_ragchecker_format(raw_results: list[dict]) -> dict:
+    """Convert raw evaluation results to RAGChecker's expected input format.
+
+    Maps the CUMRAG result schema to RAGChecker's JSON structure:
+      - sample_id -> query_id
+      - query -> query
+      - ground_truth -> gt_answer
+      - response -> response
+      - retrieved_chunks -> retrieved_context (with doc_id/text per chunk)
+
+    Args:
+        raw_results: List of dicts from the eval runner, each with:
+            sample_id, query, ground_truth, response, retrieved_chunks.
+
+    Returns:
+        Dict with 'results' key containing the RAGChecker-formatted list.
+    """
+    return {
+        "results": [
+            {
+                "query_id": entry["sample_id"],
+                "query": entry["query"],
+                "gt_answer": entry["ground_truth"],
+                "response": entry["response"],
+                "retrieved_context": [
+                    {"doc_id": chunk["doc_id"], "text": chunk["text"]}
+                    for chunk in entry["retrieved_chunks"]
+                ],
+            }
+            for entry in raw_results
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
 # RAGAS Evaluator
 # ---------------------------------------------------------------------------
 
@@ -214,15 +429,16 @@ class RAGASEvaluator:
     """Wrapper around the RAGAS evaluation framework.
 
     Computes: faithfulness, answer_relevancy, context_precision, context_recall.
-    Requires a judge LLM (Claude or GPT-4) for metric computation.
+    Uses a local llama.cpp judge server on port 8081 for metric computation.
 
     Args:
-        judge_model: Judge model identifier ('claude' or 'gpt-4').
+        judge_config: Judge config dict from eval_config.yaml.
         metrics: Optional list of metric names to compute. Defaults to all four.
 
     Example::
 
-        evaluator = RAGASEvaluator(judge_model="claude")
+        judge_config = _load_judge_config()
+        evaluator = RAGASEvaluator(judge_config=judge_config)
         result = evaluator.evaluate(
             question="What is the capital of France?",
             answer="Paris is the capital of France.",
@@ -242,10 +458,10 @@ class RAGASEvaluator:
 
     def __init__(
         self,
-        judge_model: str = "claude",
+        judge_config: dict[str, Any],
         metrics: Optional[list[str]] = None,
     ) -> None:
-        self.judge_model = judge_model
+        self.judge_config = judge_config
         self.metric_names = metrics or list(self.AVAILABLE_METRICS)
 
         # Validate metric names
@@ -265,8 +481,11 @@ class RAGASEvaluator:
         if self._initialized:
             return
 
-        logger.info("Initializing RAGAS evaluator with judge_model=%s", self.judge_model)
-        self._llm = _get_judge_llm(self.judge_model)
+        logger.info(
+            "Initializing RAGAS evaluator with local judge on port %d",
+            self.judge_config.get("server_port", _JUDGE_PORT),
+        )
+        self._llm = _get_judge_llm(self.judge_config)
         self._embeddings = _get_judge_embeddings()
         self._initialized = True
         logger.info("RAGAS evaluator initialized")
@@ -395,15 +614,17 @@ class RAGCheckerEvaluator:
     self_knowledge (SK), noise_sensitivity (NS).
 
     These metrics measure how faithfully a model uses retrieved context
-    vs relying on parametric knowledge — the central question of this project.
+    vs relying on parametric knowledge -- the central question of this project.
+
+    Uses a local llama.cpp judge server via OpenAI-compatible API on port 8081.
 
     Args:
-        judge_model: Judge model identifier ('claude' or 'gpt-4') used for
-            claim extraction and verification.
+        judge_config: Judge config dict from eval_config.yaml.
 
     Example::
 
-        evaluator = RAGCheckerEvaluator(judge_model="claude")
+        judge_config = _load_judge_config()
+        evaluator = RAGCheckerEvaluator(judge_config=judge_config)
         result = evaluator.evaluate(
             question="What is the capital of France?",
             answer="Paris is the capital of France.",
@@ -419,19 +640,25 @@ class RAGCheckerEvaluator:
         "noise_sensitivity",
     }
 
-    def __init__(self, judge_model: str = "claude") -> None:
-        self.judge_model = judge_model
+    def __init__(self, judge_config: dict[str, Any]) -> None:
+        self.judge_config = judge_config
         self._initialized = False
-        self._extractor: Any = None
         self._checker: Any = None
 
     def _ensure_initialized(self) -> None:
-        """Lazy initialization of RAGChecker components."""
+        """Lazy initialization of RAGChecker with local llama.cpp endpoints."""
         if self._initialized:
             return
 
-        logger.info("Initializing RAGChecker evaluator with judge_model=%s",
-                     self.judge_model)
+        port = self.judge_config.get("server_port", _JUDGE_PORT)
+        model = self.judge_config["model"]
+        api_base = f"http://localhost:{port}/v1"
+
+        logger.info(
+            "Initializing RAGChecker evaluator with local judge: "
+            "model=%s api_base=%s",
+            model, api_base,
+        )
 
         try:
             from ragchecker import RAGResults, RAGChecker
@@ -442,34 +669,18 @@ class RAGCheckerEvaluator:
                 "pip install ragchecker"
             )
 
-        # Configure the judge model for RAGChecker's claim extraction
-        if self.judge_model in ("claude", "claude-3", "claude-sonnet"):
-            api_key = os.environ.get("ANTHROPIC_API_KEY")
-            if not api_key:
-                raise ValueError(
-                    "ANTHROPIC_API_KEY required for Claude judge in RAGChecker"
-                )
-            self._checker = RAGChecker(
-                extractor_name="claude-sonnet-4-20250514",
-                checker_name="claude-sonnet-4-20250514",
-                extractor_api_base="https://api.anthropic.com/v1",
-                checker_api_base="https://api.anthropic.com/v1",
-            )
-        elif self.judge_model in ("gpt-4", "gpt-4o", "openai"):
-            api_key = os.environ.get("OPENAI_API_KEY")
-            if not api_key:
-                raise ValueError(
-                    "OPENAI_API_KEY required for GPT-4 judge in RAGChecker"
-                )
-            model_name = "gpt-4o" if self.judge_model in ("gpt-4o", "openai") else "gpt-4"
-            self._checker = RAGChecker(
-                extractor_name=model_name,
-                checker_name=model_name,
-            )
-        else:
-            raise ValueError(
-                f"Unsupported judge model for RAGChecker: {self.judge_model!r}"
-            )
+        # Use openai/ prefix with api_base override for local llama.cpp
+        extractor_name = f"openai/{model}"
+        checker_name = f"openai/{model}"
+
+        self._checker = RAGChecker(
+            extractor_name=extractor_name,
+            checker_name=checker_name,
+            extractor_api_base=api_base,
+            checker_api_base=api_base,
+            batch_size_extractor=8,
+            batch_size_checker=8,
+        )
 
         self._initialized = True
         logger.info("RAGChecker evaluator initialized")
@@ -604,15 +815,21 @@ class CombinedEvaluator:
     Graceful degradation: if one framework fails, the other's results
     are still returned with error information for the failed framework.
 
+    Manages the full judge server lifecycle: stop gen server -> start
+    judge server on port 8081 -> score with both frameworks -> stop judge.
+
     Args:
-        judge_model: Judge model identifier ('claude' or 'gpt-4').
+        judge_config: Judge config dict from eval_config.yaml.
         ragas_metrics: Optional list of RAGAS metric names.
         enable_ragas: Whether to run RAGAS (default True).
         enable_ragchecker: Whether to run RAGChecker (default True).
+        eval_model_path: Path to generation model GGUF (for self-judge detection).
+        gen_server: Optional LlamaServer for generation (stopped before scoring).
 
     Example::
 
-        evaluator = CombinedEvaluator(judge_model="claude")
+        judge_config = _load_judge_config()
+        evaluator = CombinedEvaluator(judge_config=judge_config)
         results = evaluator.evaluate_batch(samples)
         for r in results:
             print(r.to_spec_metrics())
@@ -620,25 +837,29 @@ class CombinedEvaluator:
 
     def __init__(
         self,
-        judge_model: str = "claude",
+        judge_config: dict[str, Any],
         ragas_metrics: Optional[list[str]] = None,
         enable_ragas: bool = True,
         enable_ragchecker: bool = True,
+        eval_model_path: Optional[str] = None,
+        gen_server: Optional[Any] = None,
     ) -> None:
-        self.judge_model = judge_model
+        self.judge_config = judge_config
         self.enable_ragas = enable_ragas
         self.enable_ragchecker = enable_ragchecker
+        self.eval_model_path = eval_model_path
+        self.gen_server = gen_server
 
         self._ragas: Optional[RAGASEvaluator] = None
         self._ragchecker: Optional[RAGCheckerEvaluator] = None
 
         if enable_ragas:
             self._ragas = RAGASEvaluator(
-                judge_model=judge_model,
+                judge_config=judge_config,
                 metrics=ragas_metrics,
             )
         if enable_ragchecker:
-            self._ragchecker = RAGCheckerEvaluator(judge_model=judge_model)
+            self._ragchecker = RAGCheckerEvaluator(judge_config=judge_config)
 
     def evaluate(
         self,
@@ -672,6 +893,12 @@ class CombinedEvaluator:
     def evaluate_batch(self, samples: list[EvalSample]) -> list[EvalResult]:
         """Evaluate a batch of samples with both frameworks.
 
+        Manages the judge server lifecycle:
+        1. Stop generation server (port 8080) to free VRAM
+        2. Start judge server (port 8081) with judge GGUF
+        3. Run RAGAS and RAGChecker scoring
+        4. Stop judge server
+
         Each framework runs independently. If one fails, the other's results
         are still returned. Errors are logged and stored in EvalResult.
 
@@ -687,33 +914,52 @@ class CombinedEvaluator:
         # Initialize per-sample results
         results = [EvalResult() for _ in range(n)]
 
-        # --- RAGAS ---
-        ragas_results: Optional[list[dict]] = None
-        if self._ragas is not None:
-            try:
-                with Timer() as t:
-                    ragas_results = self._ragas.evaluate_batch(samples)
-                logger.info("RAGAS batch completed in %.2fs", t.elapsed)
-            except Exception as e:
-                error_msg = f"RAGAS failed: {type(e).__name__}: {e}"
-                logger.error(error_msg)
-                logger.debug("RAGAS traceback:\n%s", traceback.format_exc())
-                for r in results:
-                    r.ragas_error = error_msg
+        # --- Judge server lifecycle ---
+        judge_server = None
+        try:
+            # Step 1: Stop generation server to free VRAM
+            stop_generation_server(self.gen_server)
 
-        # --- RAGChecker ---
-        ragchecker_results: Optional[list[dict]] = None
-        if self._ragchecker is not None:
-            try:
-                with Timer() as t:
-                    ragchecker_results = self._ragchecker.evaluate_batch(samples)
-                logger.info("RAGChecker batch completed in %.2fs", t.elapsed)
-            except Exception as e:
-                error_msg = f"RAGChecker failed: {type(e).__name__}: {e}"
-                logger.error(error_msg)
-                logger.debug("RAGChecker traceback:\n%s", traceback.format_exc())
-                for r in results:
-                    r.ragchecker_error = error_msg
+            # Step 2: Start judge server on port 8081
+            judge_server = start_judge_server(
+                self.judge_config,
+                eval_model_path=self.eval_model_path,
+            )
+
+            # Step 3: Run scoring
+
+            # --- RAGAS ---
+            ragas_results: Optional[list[dict]] = None
+            if self._ragas is not None:
+                try:
+                    with Timer() as t:
+                        ragas_results = self._ragas.evaluate_batch(samples)
+                    logger.info("RAGAS batch completed in %.2fs", t.elapsed)
+                except Exception as e:
+                    error_msg = f"RAGAS failed: {type(e).__name__}: {e}"
+                    logger.error(error_msg)
+                    logger.debug("RAGAS traceback:\n%s", traceback.format_exc())
+                    for r in results:
+                        r.ragas_error = error_msg
+
+            # --- RAGChecker ---
+            ragchecker_results: Optional[list[dict]] = None
+            if self._ragchecker is not None:
+                try:
+                    with Timer() as t:
+                        ragchecker_results = self._ragchecker.evaluate_batch(samples)
+                    logger.info("RAGChecker batch completed in %.2fs", t.elapsed)
+                except Exception as e:
+                    error_msg = f"RAGChecker failed: {type(e).__name__}: {e}"
+                    logger.error(error_msg)
+                    logger.debug("RAGChecker traceback:\n%s", traceback.format_exc())
+                    for r in results:
+                        r.ragchecker_error = error_msg
+
+        finally:
+            # Step 4: Always stop the judge server
+            if judge_server is not None:
+                stop_judge_server(judge_server)
 
         # --- Merge results ---
         for i in range(n):
@@ -953,13 +1199,12 @@ def main() -> None:
         python -m cumrag.evaluator \\
             --input results/raw/run.jsonl \\
             --output results/raw/scored.jsonl \\
-            --judge claude \\
             --batch-size 10
     """
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="CUMRAG Evaluator — score RAG outputs with RAGAS + RAGChecker",
+        description="CUMRAG Evaluator -- score RAG outputs with RAGAS + RAGChecker",
     )
     parser.add_argument(
         "--input", "-i",
@@ -972,9 +1217,9 @@ def main() -> None:
         help="Output JSONL file with evaluation metrics appended",
     )
     parser.add_argument(
-        "--judge",
+        "--eval-model",
         default=None,
-        help="Judge model: 'claude' or 'gpt-4' (overrides eval_config.yaml)",
+        help="Path to generation model GGUF (for self-judge quant swap detection)",
     )
     parser.add_argument(
         "--batch-size",
@@ -1004,15 +1249,19 @@ def main() -> None:
     from cumrag.utils import setup_logging
     setup_logging(level=getattr(logging, args.log_level))
 
-    # Determine judge model from args or config
-    judge_model = args.judge
-    if judge_model is None:
-        try:
-            config = load_config("eval_config")
-            judge_model = config.get("evaluation", {}).get("judge_model", "claude")
-        except FileNotFoundError:
-            judge_model = "claude"
-    logger.info("Using judge model: %s", judge_model)
+    # Load judge config from eval_config.yaml
+    try:
+        judge_config = _load_judge_config()
+    except (FileNotFoundError, KeyError) as e:
+        logger.error("Failed to load judge config: %s", e)
+        sys.exit(1)
+
+    logger.info(
+        "Using local judge: model=%s quant=%s port=%d",
+        judge_config["model"],
+        judge_config["quant"],
+        judge_config.get("server_port", _JUDGE_PORT),
+    )
 
     # Load samples
     input_path = Path(args.input)
@@ -1030,9 +1279,10 @@ def main() -> None:
     enable_ragchecker = not args.ragas_only
 
     evaluator = CombinedEvaluator(
-        judge_model=judge_model,
+        judge_config=judge_config,
         enable_ragas=enable_ragas,
         enable_ragchecker=enable_ragchecker,
+        eval_model_path=args.eval_model,
     )
 
     # Run evaluation
@@ -1042,7 +1292,7 @@ def main() -> None:
         batch_size=args.batch_size,
     )
 
-    # Write output — merge original records with eval metrics
+    # Write output -- merge original records with eval metrics
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1055,7 +1305,8 @@ def main() -> None:
         # Merge evaluation metrics into the original record
         record["eval_metrics"] = result.to_dict()
         record["eval_spec_metrics"] = result.to_spec_metrics()
-        record["eval_judge_model"] = judge_model
+        record["eval_judge_model"] = judge_config["model"]
+        record["eval_judge_quant"] = judge_config["quant"]
 
         if result.ragas_error or result.ragchecker_error:
             errors += 1
@@ -1074,7 +1325,8 @@ def main() -> None:
     print(f"  Output: {output_path}")
     print(f"  Samples: {written}")
     print(f"  Errors: {errors}")
-    print(f"  Judge: {judge_model}")
+    print(f"  Judge: {judge_config['model']} ({judge_config['quant']})")
+    print(f"  Judge port: {judge_config.get('server_port', _JUDGE_PORT)}")
     print(f"  RAGAS: {'enabled' if enable_ragas else 'disabled'}")
     print(f"  RAGChecker: {'enabled' if enable_ragchecker else 'disabled'}")
 
