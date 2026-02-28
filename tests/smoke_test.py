@@ -1617,6 +1617,80 @@ def check_p4_requirements_packages() -> Optional[str]:
 
 
 # ===================================================================
+# CHECK 26: Phase 4 — CLI --help for setup.sh, visualize, run_pipeline
+# ===================================================================
+
+
+def check_p4_setup_sh_help() -> Optional[str]:
+    """Verify setup.sh --help runs without error and produces output."""
+    import subprocess
+
+    setup_path = _PROJECT_ROOT / "setup.sh"
+    if not setup_path.exists():
+        return f"setup.sh not found at {setup_path}"
+
+    result = subprocess.run(
+        ["bash", str(setup_path), "--help"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        return f"setup.sh --help exited with code {result.returncode}: {result.stderr[:300]}"
+    if not result.stdout.strip():
+        return "setup.sh --help produced no output"
+    return None
+
+
+def check_p4_visualize_results_help() -> Optional[str]:
+    """Verify scripts/visualize_results.py --help works."""
+    return check_script_help("scripts/visualize_results.py", "visualize_results")
+
+
+def check_p4_run_pipeline_help() -> Optional[str]:
+    """Verify scripts/run_pipeline.py --help works."""
+    return check_script_help("scripts/run_pipeline.py", "run_pipeline")
+
+
+def check_p4_visualize_demo_produces_charts() -> Optional[str]:
+    """Run visualize_results.py --demo into a temp dir and verify PNGs are produced."""
+    import subprocess
+
+    script_path = _PROJECT_ROOT / "scripts" / "visualize_results.py"
+    if not script_path.exists():
+        return f"scripts/visualize_results.py not found at {script_path}"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = subprocess.run(
+            [sys.executable, str(script_path), "--demo", "--output-dir", tmpdir],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(_PROJECT_ROOT),
+        )
+        if result.returncode != 0:
+            return (
+                f"visualize_results.py --demo exited with code {result.returncode}: "
+                f"{result.stderr[:300]}"
+            )
+
+        # Check that at least one PNG was produced
+        pngs = list(Path(tmpdir).glob("*.png"))
+        if not pngs:
+            return f"visualize_results.py --demo produced no PNG files in {tmpdir}"
+
+        # We expect at least 3 charts (faithfulness, self_knowledge, throughput, etc.)
+        if len(pngs) < 3:
+            names = [p.name for p in pngs]
+            return (
+                f"visualize_results.py --demo produced only {len(pngs)} PNGs "
+                f"(expected >= 3): {names}"
+            )
+
+    return None
+
+
+# ===================================================================
 # OPTIONAL LIVE TEST
 # ===================================================================
 
@@ -1923,13 +1997,21 @@ def main() -> int:
     print()
 
     # --- Phase 4: setup.sh, scripts, docs, directories, requirements ---
-    print("[25/33] Phase 4 — setup.sh, scripts, docs, directories, requirements")
+    print("[25/27] Phase 4 — setup.sh, scripts, docs, directories, requirements")
     _run_check("p4.setup_sh.executable", check_p4_setup_sh_executable)
     _run_check("p4.scripts.visualize_results.importable", check_p4_visualize_results_importable)
     _run_check("p4.scripts.run_pipeline.importable", check_p4_run_pipeline_importable)
     _run_check("p4.docs.exist", check_p4_docs_exist)
     _run_check("p4.results.scored_dir", check_p4_results_scored_dir)
     _run_check("p4.requirements.packages", check_p4_requirements_packages)
+    print()
+
+    # --- Phase 4: CLI --help and demo chart generation ---
+    print("[26/27] Phase 4 — CLI --help and demo chart generation")
+    _run_check("p4.setup_sh.help", check_p4_setup_sh_help)
+    _run_check("p4.scripts.visualize_results.help", check_p4_visualize_results_help)
+    _run_check("p4.scripts.run_pipeline.help", check_p4_run_pipeline_help)
+    _run_check("p4.scripts.visualize_results.demo_charts", check_p4_visualize_demo_produces_charts)
     print()
 
     # --- Live test (optional) ---
