@@ -63,6 +63,40 @@ NQ_TEST_SPLIT = "validation"
 # ---------------------------------------------------------------------------
 
 
+def _extract_rgb_answer(raw_answer: object) -> tuple[str, list[str]]:
+    """Extract primary answer string and all alternatives from RGB answer field.
+
+    RGB raw data has ``answer`` as a nested structure:
+    - List of lists: ``[["alt1", "alt2", ...], ["alt3", ...]]``
+    - List of mixed strings and lists: ``[["alt1", "alt2"], "alt3"]``
+    - List of strings: ``["alt1", "alt2"]``
+    - Plain string: ``"answer"``
+
+    Returns:
+        Tuple of (primary_answer_string, flat_list_of_all_alternatives).
+    """
+    if isinstance(raw_answer, str):
+        return raw_answer, [raw_answer]
+
+    if isinstance(raw_answer, list):
+        # Flatten: each element is either a string or a list of strings
+        all_answers: list[str] = []
+        for item in raw_answer:
+            if isinstance(item, str):
+                all_answers.append(item)
+            elif isinstance(item, list):
+                all_answers.extend(str(s) for s in item)
+            else:
+                all_answers.append(str(item))
+
+        if all_answers:
+            return all_answers[0], all_answers
+        return "", []
+
+    # Unexpected type — coerce to string
+    return str(raw_answer), [str(raw_answer)]
+
+
 def normalize_rgb(raw_entry: dict, subset: str, index: int) -> dict:
     """Transform a single RGB entry into the unified schema.
 
@@ -75,15 +109,22 @@ def normalize_rgb(raw_entry: dict, subset: str, index: int) -> dict:
     Returns:
         Dict matching the unified JSONL schema.
     """
+    # RGB data uses "query" not "question", and "positive"/"negative" not "passages"
+    question = raw_entry.get("question") or raw_entry["query"]
+    passages = raw_entry.get("passages") or (
+        raw_entry.get("positive", []) + raw_entry.get("negative", [])
+    )
+    primary_answer, all_answers = _extract_rgb_answer(raw_entry["answer"])
     return {
         "sample_id": f"rgb_{subset}_{index:04d}",
         "dataset": "rgb",
         "subset": subset,
-        "query": raw_entry["question"],
-        "ground_truth": raw_entry["answer"],
+        "query": question,
+        "ground_truth": primary_answer,
         "corpus_doc_ids": [],  # passages are injected into ChromaDB at index time
         "metadata": {
-            "original_passages": raw_entry.get("passages", []),
+            "all_answers": all_answers,
+            "original_passages": passages,
             "label": raw_entry.get("label", None),
         },
     }
