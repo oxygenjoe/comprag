@@ -4,8 +4,10 @@
 # model, builds llama.cpp, downloads/normalizes datasets, builds vector index.
 #
 # Flags:
-#   --skip-datasets   Skip dataset download, normalization
+#   --skip-datasets   Skip dataset download and normalization
 #   --skip-index      Skip vector index build
+#   --skip-llama      Skip llama.cpp clone and build
+#   --help, -h        Show usage
 #
 # Each step is idempotent: re-running is safe, completed steps are skipped.
 set -euo pipefail
@@ -17,11 +19,30 @@ LLAMA_DIR="${HOME}/llama.cpp"
 # --- Parse flags ---
 SKIP_DATASETS=0
 SKIP_INDEX=0
+SKIP_LLAMA=0
 for arg in "$@"; do
     case "$arg" in
         --skip-datasets) SKIP_DATASETS=1 ;;
         --skip-index)    SKIP_INDEX=1 ;;
-        *)               echo "Unknown flag: $arg"; echo "Usage: $0 [--skip-datasets] [--skip-index]"; exit 1 ;;
+        --skip-llama)    SKIP_LLAMA=1 ;;
+        --help|-h)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "One-shot environment setup for CUMRAG eval harness."
+            echo "Each step is idempotent — safe to re-run."
+            echo ""
+            echo "Options:"
+            echo "  --skip-datasets   Skip dataset download and normalization"
+            echo "  --skip-index      Skip vector index build"
+            echo "  --skip-llama      Skip llama.cpp clone and build"
+            echo "  --help, -h        Show this help message"
+            exit 0
+            ;;
+        *)
+            echo "Unknown flag: $arg"
+            echo "Usage: $0 [--skip-datasets] [--skip-index] [--skip-llama] [--help]"
+            exit 1
+            ;;
     esac
 done
 
@@ -36,6 +57,7 @@ step() {
 echo "=== CUMRAG Setup ==="
 echo "  skip-datasets: ${SKIP_DATASETS}"
 echo "  skip-index:    ${SKIP_INDEX}"
+echo "  skip-llama:    ${SKIP_LLAMA}"
 
 # --- Step 1: System dependencies ---
 step "Installing system dependencies..."
@@ -61,10 +83,20 @@ else
 fi
 source "${VENV_DIR}/bin/activate"
 
-# --- Step 3: Python dependencies ---
+# --- Step 3: Python dependencies (staged install) ---
 step "Installing Python dependencies..."
 pip install --upgrade pip
-pip install -r "${SCRIPT_DIR}/requirements.txt"
+
+# Staged install: ragchecker and refchecker have strict version pins that
+# conflict with langchain-anthropic. Install core deps first, then install
+# ragchecker/refchecker with --no-deps to avoid resolver conflicts.
+# Build a filtered requirements file on-the-fly, excluding the conflicting packages.
+CORE_REQS=$(grep -v -E '^(ragchecker|refchecker)' "${SCRIPT_DIR}/requirements.txt")
+echo "${CORE_REQS}" | pip install -r /dev/stdin
+
+# Now install ragchecker and refchecker with --no-deps to avoid pulling
+# incompatible pinned transitive dependencies.
+pip install --no-deps ragchecker refchecker
 
 # --- Step 4: spaCy model ---
 step "Downloading spaCy language model (en_core_web_sm)..."
@@ -76,25 +108,29 @@ fi
 
 # --- Step 5: llama.cpp ---
 step "Building llama.cpp..."
-if [ ! -d "${LLAMA_DIR}" ]; then
-    git clone https://github.com/ggerganov/llama.cpp.git "${LLAMA_DIR}"
-fi
-cd "${LLAMA_DIR}"
-git pull --ff-only 2>/dev/null || true
-
-# Detect CUDA
-CUDA_FLAG="-DGGML_CUDA=OFF"
-if command -v nvcc &>/dev/null; then
-    echo "  CUDA detected, building with GPU support."
-    CUDA_FLAG="-DGGML_CUDA=ON"
+if [ "${SKIP_LLAMA}" -eq 1 ]; then
+    echo "  --skip-llama flag set, skipping."
 else
-    echo "  No CUDA detected, building CPU-only."
+    if [ ! -d "${LLAMA_DIR}" ]; then
+        git clone https://github.com/ggerganov/llama.cpp.git "${LLAMA_DIR}"
+    fi
+    cd "${LLAMA_DIR}"
+    git pull --ff-only 2>/dev/null || true
+
+    # Detect CUDA
+    CUDA_FLAG="-DGGML_CUDA=OFF"
+    if command -v nvcc &>/dev/null; then
+        echo "  CUDA detected, building with GPU support."
+        CUDA_FLAG="-DGGML_CUDA=ON"
+    else
+        echo "  No CUDA detected, building CPU-only."
+    fi
+
+    cmake -B build ${CUDA_FLAG}
+    cmake --build build --config Release -j"$(nproc)"
+
+    cd "${SCRIPT_DIR}"
 fi
-
-cmake -B build ${CUDA_FLAG}
-cmake --build build --config Release -j"$(nproc)"
-
-cd "${SCRIPT_DIR}"
 
 # --- Step 6: Directory structure ---
 step "Ensuring directory structure..."
