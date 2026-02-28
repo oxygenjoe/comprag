@@ -29,7 +29,7 @@ from typing import Any, Optional, Union
 
 from cumrag.evaluator import CombinedEvaluator, EvalSample
 from cumrag.generator import LlamaServer, format_prompt, load_prompt_template
-from cumrag.retriever import Retriever
+from cumrag.retriever import Retriever, resolve_collection_name, validate_index
 from cumrag.utils import (
     Timer,
     append_jsonl,
@@ -63,6 +63,69 @@ _DEFAULT_SEEDS = [42, 43, 44]
 _DEFAULT_TOP_K = 5
 _SERVER_STARTUP_TIMEOUT = 180.0  # seconds
 _SERVER_RESTART_ATTEMPTS = 1
+
+
+# ---------------------------------------------------------------------------
+# GPU temperature helper
+# ---------------------------------------------------------------------------
+
+
+def _get_gpu_temp() -> Optional[int]:
+    """Read current GPU temperature via nvidia-smi.
+
+    Returns:
+        GPU temperature in Celsius as int, or None if unavailable.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=temperature.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        out = result.stdout.strip()
+        if out:
+            return int(out.split("\n")[0].strip())
+    except (subprocess.SubprocessError, FileNotFoundError, OSError, ValueError):
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# v2 error formatting helper
+# ---------------------------------------------------------------------------
+
+
+def _classify_error(exc: Exception) -> str:
+    """Classify an exception into a v2 error string: 'error_type: description'.
+
+    Args:
+        exc: The exception to classify.
+
+    Returns:
+        Formatted error string like 'connection_refused: description'.
+    """
+    exc_type = type(exc).__name__
+    msg = str(exc)
+
+    if isinstance(exc, ConnectionError):
+        return f"connection_refused: {msg}"
+    if isinstance(exc, MemoryError):
+        return f"oom: {msg}"
+    if isinstance(exc, TimeoutError):
+        return f"timeout: {msg}"
+    if isinstance(exc, RuntimeError) and "OOM" in msg.upper():
+        return f"oom: {msg}"
+    if isinstance(exc, RuntimeError) and "crash" in msg.lower():
+        return f"server_crash: {msg}"
+
+    return f"{exc_type.lower()}: {msg}"
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +348,10 @@ class EvalRunner:
         # Retrieval config
         retrieval_cfg = self.config.get("retrieval", {})
         self._top_k = retrieval_cfg.get("top_k", _DEFAULT_TOP_K)
-        self._index_dir = retrieval_cfg.get("index_path", "index/")
+        # v2 config uses index_dir; fall back to deprecated index_path
+        self._index_dir = retrieval_cfg.get(
+            "index_dir", retrieval_cfg.get("index_path", "index/")
+        )
 
         # Generation config (locked per spec)
         gen_cfg = self.config.get("generation", {})
@@ -320,14 +386,43 @@ class EvalRunner:
 
     # --- Component accessors ---
 
-    def _get_retriever(self, dataset: str) -> Retriever:
-        """Get or create a Retriever for the specified dataset."""
-        if dataset not in self._retrievers:
-            self._retrievers[dataset] = Retriever(
+    def _get_retriever(
+        self, dataset: str, eval_subset: Optional[str] = None
+    ) -> Retriever:
+        """Get or create a Retriever for the specified dataset.
+
+        Uses resolve_collection_name() from retriever.py to look up the
+        collection name in eval_config, and passes config for validate_index()
+        pre-flight check.
+        """
+        cache_key = f"{dataset}_{eval_subset}" if eval_subset else dataset
+        if cache_key not in self._retrievers:
+            # Try to resolve collection name via config
+            collection_name = None
+            if self.config and eval_subset:
+                # Build the dataset key used in config collections map
+                dataset_key = f"{dataset}_{eval_subset}"
+                try:
+                    collection_name = resolve_collection_name(
+                        dataset_key, self.config
+                    )
+                    logger.info(
+                        "Resolved collection name: %s -> %s",
+                        dataset_key, collection_name,
+                    )
+                except KeyError:
+                    logger.debug(
+                        "No collection mapping for '%s', using default",
+                        dataset_key,
+                    )
+
+            self._retrievers[cache_key] = Retriever(
                 index_dir=self._index_dir,
                 dataset=dataset,
+                collection_name=collection_name,
+                config=self.config if self.config else None,
             )
-        return self._retrievers[dataset]
+        return self._retrievers[cache_key]
 
     def _get_evaluator(self) -> CombinedEvaluator:
         """Get or create the CombinedEvaluator."""
@@ -455,37 +550,55 @@ class EvalRunner:
             **kwargs: Extra fields to include in the output record.
 
         Returns:
-            Dict matching the spec JSONL output format.
+            Dict matching the v2 spec JSONL output schema.
         """
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        query_id = query_id or str(uuid.uuid4())[:8]
+        sample_id = query_id or f"{dataset}_{eval_subset or 'all'}_{str(uuid.uuid4())[:4]}"
 
-        result_record: dict[str, Any] = {
-            "timestamp": timestamp,
+        # v2 run_config block
+        run_config: dict[str, Any] = {
             "model": model_name,
-            "quantization": quantization,
-            "hardware_tier": hardware_tier,
-            "dataset": dataset,
-            "eval_subset": eval_subset or "",
-            "run_id": run_id,
-            "query_id": query_id,
-            "question": query,
-            "retrieved_context": [],
-            "generated_answer": "",
-            "ground_truth": ground_truth,
-            "metrics": {},
-            "hardware_meta": self.hardware_meta,
+            "quant": quantization,
+            "hardware": hardware_tier,
             "seed": seed,
+        }
+
+        # Build the v2 result record
+        result_record: dict[str, Any] = {
+            "sample_id": sample_id,
+            "dataset": dataset,
+            "subset": eval_subset or "",
+            "query": query,
+            "ground_truth": ground_truth,
+            "response": None,
+            "retrieved_chunks": [],
+            "run_config": run_config,
+            "perf": {},
+            "metrics": {},
+            "timestamp": timestamp,
             "error": None,
         }
 
         try:
             # 1. Retrieve top-k chunks
-            retriever = self._get_retriever(dataset)
+            retriever = self._get_retriever(dataset, eval_subset=eval_subset)
             with Timer() as t_retrieve:
                 chunks = retriever.retrieve(query, top_k=self._top_k)
-            context_texts = [c.get("text", "") for c in chunks]
-            result_record["retrieved_context"] = context_texts
+
+            # v2: structured retrieved_chunks with doc_id, text, distance, rank
+            retrieved_chunks = []
+            context_texts = []
+            for rank_idx, chunk in enumerate(chunks, start=1):
+                meta = chunk.get("metadata", {})
+                doc_id = meta.get("source", meta.get("doc_id", f"unknown_{rank_idx}"))
+                retrieved_chunks.append({
+                    "doc_id": doc_id,
+                    "text": chunk.get("text", ""),
+                    "distance": chunk.get("distance", 0.0),
+                    "rank": rank_idx,
+                })
+                context_texts.append(chunk.get("text", ""))
+            result_record["retrieved_chunks"] = retrieved_chunks
 
             logger.debug(
                 "Retrieved %d chunks in %.1fms for query: %s",
@@ -501,8 +614,8 @@ class EvalRunner:
             model_ctx = self._get_model_context_length(model_name)
             if estimated_tokens > 0.9 * model_ctx:
                 logger.warning(
-                    "Estimated prompt (%d tokens) may exceed model context "
-                    "(%d tokens). Consider reducing top_k.",
+                    "Context window risk: estimated prompt ~%d tokens exceeds "
+                    "90%% of model context (%d tokens). Consider reducing top_k.",
                     estimated_tokens,
                     model_ctx,
                 )
@@ -513,23 +626,32 @@ class EvalRunner:
                     "llama-server not running. Call _start_server() first."
                 )
 
+            wall_start = time.monotonic()
             gen_result = self._server.generate_with_metrics(
                 prompt,
                 seed=seed,
                 **_LOCKED_GEN_PARAMS,
             )
+            wall_clock_sec = time.monotonic() - wall_start
 
             generated_answer = gen_result["text"]
-            result_record["generated_answer"] = generated_answer
+            result_record["response"] = generated_answer
 
-            # 4. Collect performance metrics
+            # 4. Collect v2 perf block
             resource_snap = get_resource_snapshot()
-            perf_metrics = {
-                "tokens_per_second": gen_result.get("tokens_per_second", 0.0),
-                "time_to_first_token_ms": gen_result.get("time_to_first_token_ms", 0.0),
-                "total_inference_time_ms": gen_result.get("total_inference_time_ms", 0.0),
-                "vram_usage_mb": resource_snap.get("vram_usage_mb"),
-                "ram_usage_mb": resource_snap.get("ram_usage_mb"),
+            total_tokens = gen_result.get("completion_tokens", 0)
+            tokens_per_sec = gen_result.get("tokens_per_second", 0.0)
+            ttft_ms = gen_result.get("time_to_first_token_ms", 0.0)
+            vram_mb = resource_snap.get("vram_usage_mb")
+            gpu_temp = _get_gpu_temp()
+
+            result_record["perf"] = {
+                "ttft_ms": round(ttft_ms, 2),
+                "total_tokens": total_tokens,
+                "tokens_per_sec": round(tokens_per_sec, 2),
+                "wall_clock_sec": round(wall_clock_sec, 3),
+                "vram_mb": vram_mb,
+                "gpu_temp": gpu_temp,
             }
 
             # 5. Score response (if not skipped)
@@ -558,14 +680,21 @@ class EvalRunner:
                         "negative_rejection_rate": None,
                     }
 
-            # Merge eval + perf metrics
-            result_record["metrics"] = {**eval_metrics, **perf_metrics}
+            result_record["metrics"] = eval_metrics
 
         except Exception as e:
-            error_msg = f"{type(e).__name__}: {e}"
+            error_msg = _classify_error(e)
             logger.error("Query failed: %s\n%s", error_msg, traceback.format_exc())
+            result_record["response"] = None
             result_record["error"] = error_msg
-            # Fill metrics with nulls on error
+            result_record["perf"] = {
+                "ttft_ms": None,
+                "total_tokens": None,
+                "tokens_per_sec": None,
+                "wall_clock_sec": None,
+                "vram_mb": None,
+                "gpu_temp": None,
+            }
             result_record["metrics"] = {
                 "faithfulness": None,
                 "context_utilization": None,
@@ -573,11 +702,6 @@ class EvalRunner:
                 "noise_sensitivity": None,
                 "answer_relevancy": None,
                 "negative_rejection_rate": None,
-                "tokens_per_second": None,
-                "time_to_first_token_ms": None,
-                "total_inference_time_ms": None,
-                "vram_usage_mb": None,
-                "ram_usage_mb": None,
             }
 
         return result_record
@@ -668,17 +792,32 @@ class EvalRunner:
                 )
             except Exception as e:
                 logger.error("Failed to start server: %s", e)
-                # Log a single failure record and return
+                # Log a single failure record in v2 format and return
                 fail_record = {
-                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "model": model_name,
-                    "quantization": quantization,
-                    "hardware_tier": hardware_tier,
+                    "sample_id": f"{dataset}_{eval_subset or 'all'}_server_fail",
                     "dataset": dataset,
-                    "eval_subset": eval_subset or "",
-                    "error": f"Server start failed: {type(e).__name__}: {e}",
+                    "subset": eval_subset or "",
+                    "query": None,
+                    "ground_truth": None,
+                    "response": None,
+                    "retrieved_chunks": [],
+                    "run_config": {
+                        "model": model_name,
+                        "quant": quantization,
+                        "hardware": hardware_tier,
+                        "seed": seeds[0] if seeds else 42,
+                    },
+                    "perf": {
+                        "ttft_ms": None,
+                        "total_tokens": None,
+                        "tokens_per_sec": None,
+                        "wall_clock_sec": None,
+                        "vram_mb": None,
+                        "gpu_temp": None,
+                    },
                     "metrics": {},
-                    "hardware_meta": self.hardware_meta,
+                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "error": _classify_error(e),
                 }
                 append_jsonl(output_path, fail_record)
                 return [fail_record]
@@ -743,29 +882,39 @@ class EvalRunner:
                         if result.get("error"):
                             errors += 1
 
-                    except MemoryError:
+                    except MemoryError as mem_err:
                         # OOM — log and continue
                         logger.error(
                             "OOM on query %d (seed=%d): %s",
                             q_idx, seed, question[:60],
                         )
                         oom_record = {
+                            "sample_id": str(query_id),
+                            "dataset": dataset,
+                            "subset": eval_subset or "",
+                            "query": question,
+                            "ground_truth": ground_truth,
+                            "response": None,
+                            "retrieved_chunks": [],
+                            "run_config": {
+                                "model": model_name,
+                                "quant": quantization,
+                                "hardware": hardware_tier,
+                                "seed": seed,
+                            },
+                            "perf": {
+                                "ttft_ms": None,
+                                "total_tokens": None,
+                                "tokens_per_sec": None,
+                                "wall_clock_sec": None,
+                                "vram_mb": None,
+                                "gpu_temp": None,
+                            },
+                            "metrics": {},
                             "timestamp": datetime.now(timezone.utc).strftime(
                                 "%Y-%m-%dT%H:%M:%SZ"
                             ),
-                            "model": model_name,
-                            "quantization": quantization,
-                            "hardware_tier": hardware_tier,
-                            "dataset": dataset,
-                            "eval_subset": eval_subset or "",
-                            "run_id": run_id,
-                            "query_id": str(query_id),
-                            "question": question,
-                            "ground_truth": ground_truth,
-                            "error": "MemoryError: OOM",
-                            "metrics": {},
-                            "hardware_meta": self.hardware_meta,
-                            "seed": seed,
+                            "error": _classify_error(mem_err),
                         }
                         append_jsonl(output_path, oom_record)
                         all_results.append(oom_record)
@@ -796,22 +945,33 @@ class EvalRunner:
                                     _SERVER_RESTART_ATTEMPTS,
                                 )
                                 crash_record = {
+                                    "sample_id": str(query_id),
+                                    "dataset": dataset,
+                                    "subset": eval_subset or "",
+                                    "query": question,
+                                    "ground_truth": ground_truth,
+                                    "response": None,
+                                    "retrieved_chunks": [],
+                                    "run_config": {
+                                        "model": model_name,
+                                        "quant": quantization,
+                                        "hardware": hardware_tier,
+                                        "seed": seed,
+                                    },
+                                    "perf": {
+                                        "ttft_ms": None,
+                                        "total_tokens": None,
+                                        "tokens_per_sec": None,
+                                        "wall_clock_sec": None,
+                                        "vram_mb": None,
+                                        "gpu_temp": None,
+                                    },
+                                    "metrics": {},
                                     "timestamp": datetime.now(timezone.utc).strftime(
                                         "%Y-%m-%dT%H:%M:%SZ"
                                     ),
-                                    "model": model_name,
-                                    "quantization": quantization,
-                                    "hardware_tier": hardware_tier,
-                                    "dataset": dataset,
-                                    "eval_subset": eval_subset or "",
-                                    "run_id": run_id,
-                                    "query_id": str(query_id),
-                                    "question": question,
-                                    "ground_truth": ground_truth,
-                                    "error": f"Server crash, restart failed: {server_err}",
-                                    "metrics": {},
-                                    "hardware_meta": self.hardware_meta,
-                                    "seed": seed,
+                                    "error": f"server_crash: restart failed after "
+                                             f"{_SERVER_RESTART_ATTEMPTS} attempts: {server_err}",
                                 }
                                 append_jsonl(output_path, crash_record)
                                 all_results.append(crash_record)
@@ -926,17 +1086,32 @@ class EvalRunner:
                     "Matrix combination '%s' failed: %s\n%s",
                     combo_key, e, traceback.format_exc(),
                 )
-                # Log the failure
+                # Log the failure in v2 format
                 fail_record = {
-                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "model": model_name,
-                    "quantization": quant,
-                    "hardware_tier": hardware_tier,
+                    "sample_id": f"{combo_key}_matrix_fail",
                     "dataset": dataset,
-                    "eval_subset": eval_subset or "",
-                    "error": f"Matrix combination failed: {type(e).__name__}: {e}",
+                    "subset": eval_subset or "",
+                    "query": None,
+                    "ground_truth": None,
+                    "response": None,
+                    "retrieved_chunks": [],
+                    "run_config": {
+                        "model": model_name,
+                        "quant": quant,
+                        "hardware": hardware_tier,
+                        "seed": seeds[0] if seeds else 42,
+                    },
+                    "perf": {
+                        "ttft_ms": None,
+                        "total_tokens": None,
+                        "tokens_per_sec": None,
+                        "wall_clock_sec": None,
+                        "vram_mb": None,
+                        "gpu_temp": None,
+                    },
                     "metrics": {},
-                    "hardware_meta": self.hardware_meta,
+                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "error": _classify_error(e),
                 }
                 append_jsonl(output_path, fail_record)
                 all_results[combo_key] = [fail_record]
