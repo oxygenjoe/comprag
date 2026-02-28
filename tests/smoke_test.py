@@ -1503,6 +1503,120 @@ def check_p3_retriever_real_query() -> Optional[str]:
 
 
 # ===================================================================
+# CHECK 25: Phase 4 — setup.sh, scripts, docs, directories, requirements
+# ===================================================================
+
+
+def check_p4_setup_sh_executable() -> Optional[str]:
+    """Verify setup.sh exists and is executable."""
+    setup_path = _PROJECT_ROOT / "setup.sh"
+    if not setup_path.exists():
+        return f"setup.sh not found at {setup_path}"
+    if not os.access(setup_path, os.X_OK):
+        return f"setup.sh is not executable (missing +x permission)"
+    return None
+
+
+def check_p4_visualize_results_importable() -> Optional[str]:
+    """Verify scripts/visualize_results.py is importable with expected symbols."""
+    import importlib.util
+
+    script_path = _PROJECT_ROOT / "scripts" / "visualize_results.py"
+    if not script_path.exists():
+        return f"scripts/visualize_results.py not found at {script_path}"
+
+    spec = importlib.util.spec_from_file_location("visualize_results", str(script_path))
+    if spec is None or spec.loader is None:
+        return "Could not load module spec for visualize_results.py"
+
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    if not hasattr(mod, "generate_all_charts"):
+        return "visualize_results.py missing 'generate_all_charts' symbol"
+    if not callable(mod.generate_all_charts):
+        return "generate_all_charts is not callable"
+
+    return None
+
+
+def check_p4_run_pipeline_importable() -> Optional[str]:
+    """Verify scripts/run_pipeline.py is importable with expected symbols."""
+    import importlib.util
+
+    script_path = _PROJECT_ROOT / "scripts" / "run_pipeline.py"
+    if not script_path.exists():
+        return f"scripts/run_pipeline.py not found at {script_path}"
+
+    spec = importlib.util.spec_from_file_location("run_pipeline", str(script_path))
+    if spec is None or spec.loader is None:
+        return "Could not load module spec for run_pipeline.py"
+
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    required = ["Pipeline", "run_pipeline"]
+    missing = [s for s in required if not hasattr(mod, s)]
+    if missing:
+        return f"Missing symbols in run_pipeline: {missing}"
+
+    return None
+
+
+def check_p4_docs_exist() -> Optional[str]:
+    """Verify docs/ contains METHODOLOGY.md, HARDWARE.md, RESULTS.md (non-empty)."""
+    docs_dir = _PROJECT_ROOT / "docs"
+    if not docs_dir.exists():
+        return f"docs/ directory not found at {docs_dir}"
+
+    required_docs = ["METHODOLOGY.md", "HARDWARE.md", "RESULTS.md"]
+    errors = []
+    for doc_name in required_docs:
+        doc_path = docs_dir / doc_name
+        if not doc_path.exists():
+            errors.append(f"{doc_name} not found")
+            continue
+        if doc_path.stat().st_size == 0:
+            errors.append(f"{doc_name} is empty (0 bytes)")
+
+    if errors:
+        return "; ".join(errors)
+    return None
+
+
+def check_p4_results_scored_dir() -> Optional[str]:
+    """Verify results/scored/ directory exists."""
+    scored_dir = _PROJECT_ROOT / "results" / "scored"
+    if not scored_dir.exists():
+        return f"results/scored/ directory not found at {scored_dir}"
+    if not scored_dir.is_dir():
+        return f"results/scored exists but is not a directory"
+    return None
+
+
+def check_p4_requirements_packages() -> Optional[str]:
+    """Verify requirements.txt includes 'spacy' and 'refchecker'."""
+    req_path = _PROJECT_ROOT / "requirements.txt"
+    if not req_path.exists():
+        return f"requirements.txt not found at {req_path}"
+
+    content = req_path.read_text()
+    lines = [line.strip().lower() for line in content.splitlines() if line.strip() and not line.strip().startswith("#")]
+
+    # Check for spacy (could be 'spacy', 'spacy>=x.y', etc.)
+    has_spacy = any(line.split(">=")[0].split("==")[0].split("<")[0].split(">")[0].split("[")[0].strip() == "spacy" for line in lines)
+    if not has_spacy:
+        return "requirements.txt does not include 'spacy'"
+
+    # Check for refchecker (could be 'refchecker', 'refchecker>=x.y', etc.)
+    has_refchecker = any(line.split(">=")[0].split("==")[0].split("<")[0].split(">")[0].split("[")[0].strip() == "refchecker" for line in lines)
+    if not has_refchecker:
+        return "requirements.txt does not include 'refchecker'"
+
+    return None
+
+
+# ===================================================================
 # OPTIONAL LIVE TEST
 # ===================================================================
 
@@ -1806,6 +1920,16 @@ def main() -> int:
         _PROJECT_ROOT / "index" / "chroma.sqlite3" if _chromadb_available else None,
         "ChromaDB index not found (not built yet)",
     )
+    print()
+
+    # --- Phase 4: setup.sh, scripts, docs, directories, requirements ---
+    print("[25/33] Phase 4 — setup.sh, scripts, docs, directories, requirements")
+    _run_check("p4.setup_sh.executable", check_p4_setup_sh_executable)
+    _run_check("p4.scripts.visualize_results.importable", check_p4_visualize_results_importable)
+    _run_check("p4.scripts.run_pipeline.importable", check_p4_run_pipeline_importable)
+    _run_check("p4.docs.exist", check_p4_docs_exist)
+    _run_check("p4.results.scored_dir", check_p4_results_scored_dir)
+    _run_check("p4.requirements.packages", check_p4_requirements_packages)
     print()
 
     # --- Live test (optional) ---
