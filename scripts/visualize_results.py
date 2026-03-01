@@ -285,14 +285,31 @@ def _sort_models_by_params(models: list[str]) -> list[str]:
     return sorted(models, key=lambda m: MODEL_PARAMS.get(m, 0), reverse=True)
 
 
-def chart_faithfulness_by_model(
-    df: pd.DataFrame, output_dir: Path
+def _grouped_bar_chart(
+    df: pd.DataFrame,
+    output_dir: Path,
+    metric: str,
+    title: str,
+    ylabel: str,
+    filename: str,
 ) -> Path:
-    """Chart 1: Faithfulness by model, grouped by hardware tier.
+    """Shared helper for grouped bar charts by model and hardware tier.
 
-    Grouped bar chart with bootstrap CI error bars.
+    Aggregates *metric* across quantizations/datasets, then draws a grouped
+    bar chart with bootstrap CI error bars — one group per model, one bar per
+    hardware tier.
+
+    Args:
+        df: DataFrame with v2 aggregated schema columns.
+        output_dir: Directory to write the output PNG.
+        metric: Base metric name (e.g. ``"faithfulness"``).
+        title: Chart title.
+        ylabel: Y-axis label.
+        filename: Output PNG filename (e.g. ``"faithfulness_by_model.png"``).
+
+    Returns:
+        Path to the saved PNG.
     """
-    metric = "faithfulness"
     col_mean = f"{metric}_mean"
     col_low = f"{metric}_ci_low"
     col_high = f"{metric}_ci_high"
@@ -346,18 +363,35 @@ def chart_faithfulness_by_model(
         )
 
     ax.set_xlabel("Model")
-    ax.set_ylabel("Faithfulness Score")
-    ax.set_title("Faithfulness by Model and Hardware Tier")
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
     ax.set_xticks(x)
     ax.set_xticklabels([_short_model_name(m) for m in models], rotation=30, ha="right")
     ax.set_ylim(0, 1.05)
     ax.legend(title="Hardware Tier", loc="lower right")
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.2f}"))
 
-    out = output_dir / "faithfulness_by_model.png"
+    out = output_dir / filename
     fig.savefig(out)
     plt.close(fig)
     return out
+
+
+def chart_faithfulness_by_model(
+    df: pd.DataFrame, output_dir: Path
+) -> Path:
+    """Chart 1: Faithfulness by model, grouped by hardware tier.
+
+    Grouped bar chart with bootstrap CI error bars.
+    """
+    return _grouped_bar_chart(
+        df,
+        output_dir,
+        metric="faithfulness",
+        title="Faithfulness by Model and Hardware Tier",
+        ylabel="Faithfulness Score",
+        filename="faithfulness_by_model.png",
+    )
 
 
 def chart_self_knowledge_by_model(
@@ -367,71 +401,14 @@ def chart_self_knowledge_by_model(
 
     Grouped bar chart with bootstrap CI error bars.
     """
-    metric = "self_knowledge"
-    col_mean = f"{metric}_mean"
-    col_low = f"{metric}_ci_low"
-    col_high = f"{metric}_ci_high"
-
-    grouped = (
-        df.groupby(["model", "hardware_tier"])
-        .agg({col_mean: "mean", col_low: "mean", col_high: "mean"})
-        .reset_index()
+    return _grouped_bar_chart(
+        df,
+        output_dir,
+        metric="self_knowledge",
+        title="Self-Knowledge by Model and Hardware Tier",
+        ylabel="Self-Knowledge Score",
+        filename="self_knowledge_by_model.png",
     )
-
-    models = _sort_models_by_params(grouped["model"].unique().tolist())
-    hw_tiers = sorted(grouped["hardware_tier"].unique().tolist())
-    palette = sns.color_palette(PALETTE_NAME, len(hw_tiers))
-
-    fig, ax = plt.subplots(figsize=FIGSIZE_BAR)
-    n_hw = len(hw_tiers)
-    bar_width = 0.8 / max(n_hw, 1)
-    x = np.arange(len(models))
-
-    for i, hw in enumerate(hw_tiers):
-        hw_data = grouped[grouped["hardware_tier"] == hw]
-        means = []
-        err_low = []
-        err_high = []
-        for model in models:
-            row = hw_data[hw_data["model"] == model]
-            if len(row) > 0:
-                m = row[col_mean].values[0]
-                lo = row[col_low].values[0]
-                hi = row[col_high].values[0]
-                means.append(m)
-                err_low.append(m - lo)
-                err_high.append(hi - m)
-            else:
-                means.append(0)
-                err_low.append(0)
-                err_high.append(0)
-
-        offset = (i - n_hw / 2 + 0.5) * bar_width
-        ax.bar(
-            x + offset,
-            means,
-            bar_width,
-            yerr=[err_low, err_high],
-            capsize=3,
-            label=hw,
-            color=palette[i],
-            edgecolor="white",
-            linewidth=0.5,
-        )
-
-    ax.set_xlabel("Model")
-    ax.set_ylabel("Self-Knowledge Score")
-    ax.set_title("Self-Knowledge by Model and Hardware Tier")
-    ax.set_xticks(x)
-    ax.set_xticklabels([_short_model_name(m) for m in models], rotation=30, ha="right")
-    ax.set_ylim(0, 1.05)
-    ax.legend(title="Hardware Tier", loc="lower right")
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.2f}"))
-
-    out = output_dir / "self_knowledge_by_model.png"
-    fig.savefig(out)
-    plt.close(fig)
-    return out
 
 
 def chart_model_size_vs_faithfulness(

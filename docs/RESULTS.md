@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary
 
-**Thesis**: Small models (8-30B parameters) with retrieval-augmented generation beat large models without retrieval on faithfulness and factual accuracy benchmarks, while running entirely on local hardware with no data exfiltration.
+**Thesis**: Small models (1.7B-14B parameters) with retrieval-augmented generation beat large models without retrieval on faithfulness and factual accuracy benchmarks, while running entirely on local hardware with no data exfiltration.
 
 **Verdict**: PENDING: Run benchmark matrix first.
 
@@ -252,7 +252,7 @@ PENDING: Run benchmark matrix first.
 
 <!-- This section will be populated after benchmarks complete. Expected findings to evaluate:
 
-1. Does retrieval-augmented generation with small models (8-30B) outperform large models
+1. Does retrieval-augmented generation with small models (1.7B-14B) outperform large models
    without retrieval on faithfulness metrics?
 2. What is the minimum model size that achieves acceptable faithfulness with RAG?
 3. At what quantization level does quality degrade significantly?
