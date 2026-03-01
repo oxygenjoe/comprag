@@ -408,6 +408,17 @@ def to_ragchecker_format(raw_results: list[dict]) -> dict:
     Returns:
         Dict with 'results' key containing the RAGChecker-formatted list.
     """
+    valid = [
+        entry for entry in raw_results
+        if entry.get("response") is not None and entry.get("error") is None
+    ]
+    filtered_count = len(raw_results) - len(valid)
+    if filtered_count:
+        logger.warning(
+            "Filtered %d/%d records with null response or error before RAGChecker conversion",
+            filtered_count,
+            len(raw_results),
+        )
     return {
         "results": [
             {
@@ -420,8 +431,7 @@ def to_ragchecker_format(raw_results: list[dict]) -> dict:
                     for chunk in entry["retrieved_chunks"]
                 ],
             }
-            for entry in raw_results
-            if entry.get("response") is not None and entry.get("error") is None
+            for entry in valid
         ]
     }
 
