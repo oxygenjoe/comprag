@@ -42,13 +42,30 @@ DEFAULT_DATASETS_DIR = _PROJECT_ROOT / "datasets"
 
 # RGB subset -> source file mapping (English only).
 # Prefer en_refine.json over en.json when available (refined = corrected labels).
-# noise_robustness and negative_rejection use the same source file;
-# the distinction is in how they're evaluated (noise_rate < 1 vs noise_rate = 1).
+#
+# IMPORTANT: noise_robustness and negative_rejection share the SAME source data.
+# The RGB benchmark does NOT have separate data files per subset for these two.
+# All 300 entries have both "positive" and "negative" passage lists.
+# The distinction is an EVAL-TIME parameter (noise_rate):
+#   - noise_robustness: noise_rate < 1 (mix of positive + negative passages)
+#   - negative_rejection: noise_rate = 1 (ALL passages are irrelevant; model should refuse)
+# See: evalue.py lines 50-65, and readme.md line 90.
+# We normalize both from the same file but tag each with its eval-time noise_rate
+# so the evaluation pipeline knows how to construct passage sets.
 RGB_SUBSET_FILES: dict[str, list[str]] = {
     "noise_robustness": ["en_refine.json", "en.json"],
     "negative_rejection": ["en_refine.json", "en.json"],
     "information_integration": ["en_int.json"],
     "counterfactual_robustness": ["en_fact.json"],
+}
+
+# Eval-time noise_rate per subset. This determines how passages are assembled:
+# noise_rate < 1 means some passages are relevant; noise_rate = 1 means ALL are noise.
+RGB_SUBSET_NOISE_RATE: dict[str, float] = {
+    "noise_robustness": 0.5,       # default eval noise_rate (mix of positive + negative)
+    "negative_rejection": 1.0,     # all passages are irrelevant — model must refuse
+    "information_integration": 0.0, # all passages are relevant (multi-doc integration)
+    "counterfactual_robustness": 0.0, # passages contain factual errors to detect
 }
 
 # HaluEval QA data file (relative to halueval dataset dir)
@@ -126,6 +143,10 @@ def normalize_rgb(raw_entry: dict, subset: str, index: int) -> dict:
             "all_answers": all_answers,
             "original_passages": passages,
             "label": raw_entry.get("label", None),
+            # Eval-time noise_rate distinguishes how passages are assembled:
+            # noise_robustness (< 1): mix of positive + negative passages
+            # negative_rejection (= 1): ALL passages are irrelevant noise
+            "noise_rate": RGB_SUBSET_NOISE_RATE.get(subset, 0.0),
         },
     }
 
