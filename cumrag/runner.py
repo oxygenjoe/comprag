@@ -361,7 +361,7 @@ class EvalRunner:
         # Evaluation config
         eval_cfg = self.config.get("evaluation", {})
         judge_cfg = self.config.get("judge", {})
-        self._judge_model = judge_cfg.get("model", eval_cfg.get("judge_model", "qwen2.5-14b-instruct"))
+        self._judge_model = judge_cfg.get("model", "qwen2.5-14b-instruct")
         self._enable_ragas = "ragas" in eval_cfg.get("frameworks", ["ragas", "ragchecker"])
         self._enable_ragchecker = "ragchecker" in eval_cfg.get(
             "frameworks", ["ragas", "ragchecker"]
