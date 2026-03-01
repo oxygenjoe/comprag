@@ -847,17 +847,20 @@ def build_nq_index(
     persist_dir: Optional[Path] = None,
     batch_size: int = 256,
 ) -> dict:
-    """Build a ChromaDB stub index for Natural Questions from normalized JSONL.
+    """Build a ChromaDB index for Natural Questions from normalized JSONL.
 
-    NQ requires a full Wikipedia corpus for production retrieval, which is
-    deferred until the V100 arrives. For integration testing NOW, this
-    function creates a small stub corpus from the NQ test set itself:
-    each record's ground_truth and all_answers fields are combined into a
-    synthetic "answer document" that the retriever can query against.
+    Reads ``datasets/nq/normalized/test.jsonl`` (produced by
+    normalize_datasets.py) and indexes each sample's ground_truth and
+    all_answers as a synthetic answer document. Document IDs link back
+    to the sample via ``sample_id``.
 
-    The stub collection is marked with ``index_type: nq_stub_test`` in its
-    metadata so it can be distinguished from a real Wikipedia-backed index
-    and replaced later.
+    In production, NQ retrieval will use the full Wikipedia corpus on
+    Optane. This index uses ``index_type: nq_normalized_test`` so the
+    eval pipeline can distinguish it from a Wikipedia-backed index and
+    swap it out later without changing the rest of the pipeline.
+
+    Follows the same pattern as ``build_halueval_index()``:
+    read normalized JSONL -> extract text fields -> chunk -> embed -> persist.
 
     Args:
         chunk_size: Whitespace words per chunk (default 300).
@@ -871,27 +874,18 @@ def build_nq_index(
 
     Raises:
         FileNotFoundError: If normalized JSONL file does not exist.
-        ValueError: If no stub documents could be created.
+        ValueError: If no documents could be created.
     """
     normalized_path = DATASETS_DIR / "nq" / "normalized" / "test.jsonl"
     if not normalized_path.exists():
-        logger.info(
-            "Skipping NQ: normalized file not found at %s. "
-            "Run 'python scripts/normalize_datasets.py --datasets nq' first.",
-            normalized_path,
+        raise FileNotFoundError(
+            f"Normalized NQ file not found: {normalized_path}\n"
+            f"Run 'python scripts/normalize_datasets.py --datasets nq' first."
         )
-        return {
-            "dataset": "nq",
-            "subset": "test",
-            "collection_name": None,
-            "num_chunks": 0,
-            "skipped": True,
-            "elapsed_seconds": 0.0,
-        }
 
     embedding_model = _get_embedding_model_name()
     collection_name = make_collection_name(
-        dataset="nq_wiki",
+        dataset="nq",
         embedding_model=embedding_model,
         chunk_size=chunk_size,
         chunk_overlap=overlap,
@@ -921,40 +915,40 @@ def build_nq_index(
         except Exception:
             pass
 
-    with timer("NQ stub indexing", logger=logger) as t:
+    with timer("NQ indexing", logger=logger) as t:
         # Step 1: Load normalized NQ samples
         logger.info("Loading normalized NQ samples from %s", normalized_path)
         samples = _load_jsonl(normalized_path)
-        logger.info("Loaded %d NQ samples for stub corpus", len(samples))
+        logger.info("Loaded %d NQ samples", len(samples))
 
-        # Step 2: Build synthetic answer documents from ground_truth + all_answers
+        # Step 2: Build answer documents from ground_truth + all_answers
         all_chunks = []
+        skipped_no_answer = 0
 
         for sample in samples:
             sample_id = sample["sample_id"]
-            query = sample.get("query", "")
             ground_truth = sample.get("ground_truth", "")
             metadata = sample.get("metadata", {})
             all_answers = metadata.get("all_answers", [])
 
             if not ground_truth:
+                skipped_no_answer += 1
                 continue
 
-            # Build a synthetic document from the question and its answers
-            answers_text = " ".join(
+            # Combine ground_truth with alternative answers as document text
+            answer_parts = [ground_truth]
+            answer_parts.extend(
                 a for a in all_answers if a and a != ground_truth
             )
-            stub_text = f"Question: {query}\nAnswer: {ground_truth}."
-            if answers_text:
-                stub_text = f"{stub_text} {answers_text}"
+            doc_text = " ".join(answer_parts)
 
-            # Chunk the stub document (most are short enough for one chunk)
+            # Chunk the document (most NQ answers are short enough for one chunk)
             text_chunks = chunk_text(
-                stub_text, chunk_size=chunk_size, overlap=overlap
+                doc_text, chunk_size=chunk_size, overlap=overlap
             )
 
             for chunk_idx, chunk_str in enumerate(text_chunks):
-                chunk_id = f"{sample_id}_stub"
+                chunk_id = f"{sample_id}_answer"
                 if len(text_chunks) > 1:
                     chunk_id = f"{chunk_id}_chunk_{chunk_idx}"
 
@@ -967,14 +961,19 @@ def build_nq_index(
                     "subset": "test",
                 })
 
+        if skipped_no_answer:
+            logger.warning(
+                "NQ: %d samples had no ground_truth field", skipped_no_answer
+            )
+
         if not all_chunks:
             raise ValueError(
-                "No stub documents could be created from NQ test data. "
+                "No documents could be created from NQ test data. "
                 "Check that normalized JSONL has ground_truth fields."
             )
 
         logger.info(
-            "NQ stub corpus: %d chunks from %d samples",
+            "NQ: %d answer chunks from %d samples",
             len(all_chunks),
             len(samples),
         )
@@ -989,7 +988,7 @@ def build_nq_index(
             "chunk_overlap_words": overlap,
             "dataset": "nq",
             "subset": "test",
-            "index_type": "nq_stub_test",
+            "index_type": "nq_normalized_test",
             "num_samples": len(samples),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "cumrag_version": CUMRAG_VERSION,
@@ -1002,7 +1001,7 @@ def build_nq_index(
         )
 
         logger.info(
-            "Embedding and inserting %d NQ stub chunks (batch_size=%d) ...",
+            "Embedding and inserting %d NQ chunks (batch_size=%d) ...",
             len(all_chunks),
             batch_size,
         )
@@ -1011,7 +1010,7 @@ def build_nq_index(
 
         for batch_idx in tqdm(
             range(total_batches),
-            desc="Embedding NQ stub",
+            desc="Embedding NQ",
             unit="batch",
         ):
             start = batch_idx * batch_size
@@ -1045,13 +1044,13 @@ def build_nq_index(
         "chunk_size": chunk_size,
         "overlap": overlap,
         "embedding_model": embedding_model,
-        "index_type": "nq_stub_test",
+        "index_type": "nq_normalized_test",
         "skipped": False,
         "elapsed_seconds": round(t.elapsed, 2),
     }
 
     logger.info(
-        "NQ stub index built: %d chunks in collection '%s' (%.1fs)",
+        "NQ index built: %d chunks in collection '%s' (%.1fs)",
         len(all_chunks),
         collection_name,
         t.elapsed,
@@ -1312,7 +1311,7 @@ def build_all(
         except Exception as e:
             logger.error("Failed to index RGB/%s: %s", subset, e, exc_info=True)
 
-    # --- NQ: stub corpus from ground_truth answers for integration testing ---
+    # --- NQ: answer corpus from normalized JSONL ground_truth + all_answers ---
     try:
         stats = build_nq_index(
             chunk_size=chunk_size,
