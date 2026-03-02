@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Union
 
+import yaml
+
 from cumrag.evaluator import CombinedEvaluator, EvalSample
 from cumrag.generator import LlamaServer, format_prompt, load_prompt_template
 from cumrag.retriever import Retriever, resolve_collection_name, validate_index
@@ -131,6 +133,207 @@ def check_headless() -> None:
             display,
             wayland,
         )
+
+
+# ---------------------------------------------------------------------------
+# Run matrix loader
+# ---------------------------------------------------------------------------
+
+
+def _resolve_model_path(
+    model_name: str,
+    quant: str,
+    models_dir: Optional[Union[str, Path]] = None,
+) -> str:
+    """Resolve a model name + quant from run_matrix.yaml to a GGUF file path.
+
+    Uses models.yaml as the canonical source: looks up the model by matching
+    the ``name`` field (case-insensitive) against models.yaml keys, then
+    reads the ``filename`` for the requested quantization.
+
+    Falls back to a convention-based path if models.yaml lookup fails:
+    ``models/{name_lower}-{quant_lower}.gguf``
+
+    Args:
+        model_name: Display-style model name from run_matrix.yaml
+            (e.g. "Qwen2.5-14B-Instruct").
+        quant: Quantization level (e.g. "Q4_K_M", "FP16").
+        models_dir: Override models directory. Defaults to ``<project>/models``.
+
+    Returns:
+        Resolved path string like "models/Qwen2.5-14B-Instruct-Q4_K_M.gguf".
+
+    Raises:
+        FileNotFoundError: If the resolved GGUF file does not exist on disk
+            (warning only — returned path is still valid for downstream
+            error handling).
+    """
+    if models_dir is None:
+        models_dir = _PROJECT_ROOT / "models"
+    else:
+        models_dir = Path(models_dir)
+
+    # Try models.yaml lookup first
+    try:
+        models_config = load_config("models")
+        registry = models_config.get("models", {})
+
+        # Match run_matrix name to models.yaml key (case-insensitive)
+        # e.g. "Qwen2.5-14B-Instruct" -> "qwen2.5-14b-instruct"
+        name_lower = model_name.lower()
+        matched_key = None
+        for key in registry:
+            if key.lower() == name_lower:
+                matched_key = key
+                break
+
+        if matched_key:
+            model_spec = registry[matched_key]
+            quants = model_spec.get("quantizations", {})
+
+            # Match quant (case-insensitive)
+            quant_upper = quant.upper()
+            for q_key, q_spec in quants.items():
+                if q_key.upper() == quant_upper:
+                    filename = q_spec.get("filename", "")
+                    if filename and filename != "TBD":
+                        resolved = str(models_dir / filename)
+                        logger.debug(
+                            "Resolved model path via models.yaml: %s %s -> %s",
+                            model_name, quant, resolved,
+                        )
+                        return resolved
+
+            # Quant not in models.yaml — fall through to convention
+            logger.warning(
+                "Quant '%s' not found in models.yaml for '%s', "
+                "using convention-based path",
+                quant, model_name,
+            )
+        else:
+            logger.warning(
+                "Model '%s' not found in models.yaml, "
+                "using convention-based path",
+                model_name,
+            )
+
+    except (FileNotFoundError, KeyError, TypeError) as e:
+        logger.warning(
+            "Failed to load models.yaml for path resolution: %s. "
+            "Using convention-based path.",
+            e,
+        )
+
+    # Fallback: convention-based path
+    # "Qwen2.5-14B-Instruct" + "Q4_K_M" -> "qwen2.5-14b-instruct-q4_k_m.gguf"
+    fallback_name = f"{model_name.lower()}-{quant.lower()}.gguf"
+    resolved = str(models_dir / fallback_name)
+    logger.debug(
+        "Resolved model path via convention: %s %s -> %s",
+        model_name, quant, resolved,
+    )
+    return resolved
+
+
+def load_run_matrix(
+    yaml_path: Union[str, Path],
+    hardware_tier: str,
+    models_dir: Optional[Union[str, Path]] = None,
+) -> tuple[dict, list[dict]]:
+    """Load and parse run_matrix.yaml, returning tier config and combo dicts.
+
+    Validates the requested ``hardware_tier`` exists, resolves model GGUF
+    paths via models.yaml, and expands each (model x quant x dataset) into
+    a combination dict compatible with ``EvalRunner.run_matrix()``.
+
+    Args:
+        yaml_path: Path to run_matrix.yaml.
+        hardware_tier: Tier key to select (e.g. "v100_32gb", "1660s").
+        models_dir: Override models directory for GGUF path resolution.
+
+    Returns:
+        Tuple of:
+            - tier_config (dict): The full tier entry from the YAML, with
+              ``eval_config`` merged in as a top-level key.
+            - combinations (list[dict]): List of combo dicts, each with:
+                - ``model_path`` (str): Resolved GGUF file path.
+                - ``dataset`` (str): Dataset name.
+                - ``hardware_tier`` (str): The tier key.
+                - ``num_queries`` (int|None): From YAML ``num_queries``.
+                - ``seeds`` (list[int]): Generated from ``runs_per_combo``.
+
+    Raises:
+        FileNotFoundError: If yaml_path does not exist.
+        ValueError: If hardware_tier is not found in the YAML.
+        yaml.YAMLError: If the YAML is malformed.
+    """
+    yaml_path = Path(yaml_path)
+    if not yaml_path.exists():
+        raise FileNotFoundError(f"Run matrix YAML not found: {yaml_path}")
+
+    with open(yaml_path, "r", encoding="utf-8") as f:
+        matrix = yaml.safe_load(f)
+
+    if not isinstance(matrix, dict):
+        raise ValueError(f"Invalid run matrix YAML: expected dict, got {type(matrix)}")
+
+    # Validate tier exists
+    tiers = matrix.get("tiers", {})
+    if hardware_tier not in tiers:
+        available = ", ".join(sorted(tiers.keys()))
+        raise ValueError(
+            f"Hardware tier '{hardware_tier}' not found in run matrix. "
+            f"Available tiers: {available}"
+        )
+
+    tier_config = dict(tiers[hardware_tier])  # shallow copy
+
+    # Attach eval_config to tier_config for downstream use
+    eval_config = matrix.get("eval_config", {})
+    tier_config["eval_config"] = eval_config
+
+    # Global settings
+    datasets = matrix.get("datasets", ["rgb"])
+    runs_per_combo = matrix.get("runs_per_combo", 3)
+    num_queries = matrix.get("num_queries")  # None means all
+
+    # Generate seeds from runs_per_combo
+    seeds = list(range(42, 42 + runs_per_combo))
+
+    # Build combinations: model x quant x dataset
+    combinations: list[dict] = []
+    models_list = tier_config.get("models", [])
+
+    for model_entry in models_list:
+        model_name = model_entry.get("name", "")
+        quants = model_entry.get("quants", [])
+
+        for quant in quants:
+            model_path = _resolve_model_path(
+                model_name, quant, models_dir=models_dir,
+            )
+
+            for dataset in datasets:
+                combo: dict[str, Any] = {
+                    "model_path": model_path,
+                    "dataset": dataset,
+                    "hardware_tier": hardware_tier,
+                    "num_queries": num_queries,
+                    "seeds": seeds,
+                }
+                combinations.append(combo)
+
+    logger.info(
+        "Loaded run matrix: tier=%s, models=%d, combos=%d "
+        "(across %d datasets, %d seeds each)",
+        hardware_tier,
+        sum(len(m.get("quants", [])) for m in models_list),
+        len(combinations),
+        len(datasets),
+        len(seeds),
+    )
+
+    return tier_config, combinations
 
 
 # ---------------------------------------------------------------------------
@@ -1526,27 +1729,45 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "CUMRAG eval runner -- orchestrate retrieve -> generate -> score -> log.\n"
-            "Runs the full evaluation pipeline for a model on a dataset."
+            "Runs the full evaluation pipeline for a model on a dataset.\n\n"
+            "Two modes:\n"
+            "  Per-model:  --model <gguf_path> [--dataset ...]\n"
+            "  Matrix:     --matrix <run_matrix.yaml> --hardware-tier <tier>"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
+            "  # Per-model mode\n"
             "  %(prog)s --model models/llama-3.1-8b-instruct-q4_k_m.gguf "
             "--dataset rgb --subset noise_robustness --hardware-tier cpu "
             "--num-queries 10 --output results/raw/smoke_test.jsonl\n\n"
             "  %(prog)s --model models/qwen2.5-14b-instruct-q4_k_m.gguf "
             "--dataset nq --hardware-tier v100 --num-runs 5\n\n"
+            "  # Matrix mode — run all combos for a tier\n"
+            "  %(prog)s --matrix config/run_matrix.yaml --hardware-tier v100_32gb\n\n"
+            "  # Matrix mode — simulated tier\n"
+            "  %(prog)s --matrix config/run_matrix.yaml --hardware-tier v100_16gb_sim\n\n"
             "  %(prog)s --server-url http://localhost:8080 --dataset rgb "
             "--hardware-tier cpu --skip-eval"
         ),
     )
 
-    # Required
+    # Model selection (per-model mode)
     parser.add_argument(
         "--model",
         type=str,
         default=None,
         help="Path to GGUF model file. If not set, connects to --server-url.",
+    )
+
+    # Matrix mode
+    parser.add_argument(
+        "--matrix",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to run_matrix.yaml. Requires --hardware-tier. "
+             "Runs all model/quant/dataset combos for the selected tier.",
     )
 
     # Dataset
@@ -1568,8 +1789,9 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--hardware-tier",
         type=str,
-        default="cpu",
-        help="Hardware tier ID (default: cpu).",
+        default=None,
+        help="Hardware tier ID. Required for --matrix mode. "
+             "Defaults to 'cpu' in per-model mode.",
     )
     parser.add_argument(
         "--n-gpu-layers",
@@ -1653,24 +1875,129 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
     args = parser.parse_args(argv)
 
-    if args.model is None and args.server_url is None:
-        parser.error("Either --model or --server-url is required.")
+    if args.matrix:
+        # Matrix mode — --hardware-tier is required
+        if args.hardware_tier is None:
+            parser.error(
+                "--hardware-tier is required when using --matrix. "
+                "Example: --matrix config/run_matrix.yaml --hardware-tier v100_32gb"
+            )
+    elif args.model is None and args.server_url is None:
+        parser.error("Either --model, --server-url, or --matrix is required.")
+
+    # Default --hardware-tier for per-model mode
+    if args.hardware_tier is None:
+        args.hardware_tier = "cpu"
 
     return args
 
 
-def main(argv: Optional[list[str]] = None) -> int:
-    """CLI entry point.
+def _run_matrix_mode(args: argparse.Namespace) -> int:
+    """Execute --matrix mode: load run_matrix.yaml, iterate all combos.
+
+    Args:
+        args: Parsed CLI arguments (must have args.matrix and args.hardware_tier).
+
+    Returns:
+        0 on success, 1 on partial failure, non-zero on fatal error.
+    """
+    logger.info("CUMRAG Eval Runner starting (matrix mode)")
+    logger.info(
+        "Matrix: %s, tier: %s", args.matrix, args.hardware_tier,
+    )
+
+    # Load and parse the run matrix
+    try:
+        tier_config, combinations = load_run_matrix(
+            yaml_path=args.matrix,
+            hardware_tier=args.hardware_tier,
+        )
+    except (FileNotFoundError, ValueError, yaml.YAMLError) as e:
+        logger.error("Failed to load run matrix: %s", e)
+        return 1
+
+    if not combinations:
+        logger.error(
+            "No combinations generated for tier '%s'. "
+            "Check run_matrix.yaml models list.",
+            args.hardware_tier,
+        )
+        return 1
+
+    logger.info(
+        "Tier: %s (%s), simulated=%s, combos=%d",
+        args.hardware_tier,
+        tier_config.get("description", ""),
+        tier_config.get("simulated", False),
+        len(combinations),
+    )
+
+    # Headless check for low-VRAM tiers
+    if args.hardware_tier in _LOW_VRAM_TIERS:
+        check_headless()
+
+    # Apply VRAM limit for simulated tiers (set in parent env before any
+    # subprocess launches — will be inherited by llama-server)
+    apply_vram_limit(tier_config)
+
+    # Create runner and configure it from the matrix
+    runner = EvalRunner(config_path=args.config)
+
+    # Set tier config for simulated tagging in JSONL output
+    runner.set_tier_config(tier_config)
+
+    # Set timeout/retry config from the matrix's eval_config block
+    eval_cfg = tier_config.get("eval_config", {})
+    if eval_cfg:
+        runner.set_timeout_config(
+            timeout_load_s=eval_cfg.get("timeout_load_s"),
+            timeout_gen_s=eval_cfg.get("timeout_gen_s"),
+            max_retries=eval_cfg.get("max_retries"),
+        )
+
+    try:
+        all_results = runner.run_matrix(
+            combinations=combinations,
+            output_dir=args.output,
+        )
+
+        # Print matrix summary
+        total_combos = len(combinations)
+        completed_combos = len([v for v in all_results.values() if v])
+        total_records = sum(len(v) for v in all_results.values())
+        total_errors = sum(
+            sum(1 for r in v if r.get("error"))
+            for v in all_results.values()
+        )
+
+        print(f"\nMatrix Eval Summary:")
+        print(f"  Tier:          {args.hardware_tier}")
+        print(f"  Combos:        {completed_combos}/{total_combos}")
+        print(f"  Total records: {total_records}")
+        print(f"  Errors:        {total_errors}")
+
+        return 0 if completed_combos > 0 else 1
+
+    except KeyboardInterrupt:
+        logger.warning("Interrupted by user")
+        return 130
+    except Exception as e:
+        logger.error("Fatal error: %s\n%s", e, traceback.format_exc())
+        return 1
+    finally:
+        clear_vram_limit()
+        runner.cleanup()
+
+
+def _run_single_model_mode(args: argparse.Namespace) -> int:
+    """Execute per-model mode (existing --model / --server-url path).
+
+    Args:
+        args: Parsed CLI arguments.
 
     Returns:
         0 on success, 1 on failure.
     """
-    args = parse_args(argv)
-
-    import logging as _logging
-    level = getattr(_logging, args.log_level)
-    setup_logging(level=level, log_file=args.log_file)
-
     # Parse seeds
     if args.seeds:
         try:
@@ -1745,6 +2072,27 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 1
     finally:
         runner.cleanup()
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    """CLI entry point.
+
+    Dispatches to matrix mode (``--matrix``) or per-model mode
+    (``--model`` / ``--server-url``) based on CLI arguments.
+
+    Returns:
+        0 on success, 1 on failure.
+    """
+    args = parse_args(argv)
+
+    import logging as _logging
+    level = getattr(_logging, args.log_level)
+    setup_logging(level=level, log_file=args.log_file)
+
+    if args.matrix:
+        return _run_matrix_mode(args)
+    else:
+        return _run_single_model_mode(args)
 
 
 if __name__ == "__main__":
