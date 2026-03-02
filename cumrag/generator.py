@@ -583,13 +583,17 @@ class LlamaServer:
 
         return messages
 
-    def generate(self, prompt: str, **params: Any) -> str:
+    def generate(
+        self, prompt: str, timeout: Optional[float] = None, **params: Any
+    ) -> str:
         """Send a completion request and return the response text.
 
         Args:
             prompt: The fully formatted prompt (template already filled with
                 query and chunks). If you have raw query + chunks, use
                 generate_rag() instead.
+            timeout: Per-request timeout in seconds. If not provided, uses
+                the module-level _REQUEST_TIMEOUT (300s).
             **params: Override generation parameters. Supported keys:
                 temperature, top_p, max_tokens, seed, stop.
 
@@ -599,9 +603,11 @@ class LlamaServer:
         Raises:
             requests.HTTPError: On HTTP errors from the server.
             requests.ConnectionError: If server is unreachable.
+            requests.Timeout: If request exceeds timeout.
             RuntimeError: On unexpected response format.
         """
         url = f"{self.base_url}/v1/chat/completions"
+        request_timeout = timeout if timeout is not None else _REQUEST_TIMEOUT
 
         # Merge defaults with per-call overrides
         gen_params = {**self._default_params, **params}
@@ -625,7 +631,7 @@ class LlamaServer:
                 resp = self._session.post(
                     url,
                     json=payload,
-                    timeout=_REQUEST_TIMEOUT,
+                    timeout=request_timeout,
                 )
                 resp.raise_for_status()
 
@@ -655,7 +661,7 @@ class LlamaServer:
                 raise
             except requests.Timeout as e:
                 logger.error(
-                    "Request timed out after %ds: %s", _REQUEST_TIMEOUT, e
+                    "Request timed out after %ds: %s", request_timeout, e
                 )
                 raise
 
@@ -665,12 +671,14 @@ class LlamaServer:
         )
 
     def generate_with_metrics(
-        self, prompt: str, **params: Any
+        self, prompt: str, timeout: Optional[float] = None, **params: Any
     ) -> dict[str, Any]:
         """Send a completion request and return response with performance metrics.
 
         Args:
             prompt: The fully formatted prompt.
+            timeout: Per-request timeout in seconds. If not provided, uses
+                the module-level _REQUEST_TIMEOUT (300s).
             **params: Override generation parameters.
 
         Returns:
@@ -686,6 +694,7 @@ class LlamaServer:
             Same as generate().
         """
         url = f"{self.base_url}/v1/chat/completions"
+        request_timeout = timeout if timeout is not None else _REQUEST_TIMEOUT
 
         gen_params = {**self._default_params, **params}
         messages = self._build_messages(prompt)
@@ -708,7 +717,7 @@ class LlamaServer:
                     resp = self._session.post(
                         url,
                         json=payload,
-                        timeout=_REQUEST_TIMEOUT,
+                        timeout=request_timeout,
                     )
                     resp.raise_for_status()
 
@@ -768,7 +777,7 @@ class LlamaServer:
                 raise
             except requests.Timeout as e:
                 logger.error(
-                    "Request timed out after %ds: %s", _REQUEST_TIMEOUT, e
+                    "Request timed out after %ds: %s", request_timeout, e
                 )
                 raise
 
@@ -783,6 +792,7 @@ class LlamaServer:
         self,
         query: str,
         retrieved_chunks: list[dict],
+        timeout: Optional[float] = None,
         **params: Any,
     ) -> str:
         """Format prompt from template + query + chunks, then generate.
@@ -790,6 +800,7 @@ class LlamaServer:
         Args:
             query: The user's query.
             retrieved_chunks: List of chunk dicts with 'text' key.
+            timeout: Per-request timeout in seconds.
             **params: Override generation parameters.
 
         Returns:
@@ -799,12 +810,13 @@ class LlamaServer:
             self.load_template()
 
         prompt = format_prompt(self._template, query, retrieved_chunks)
-        return self.generate(prompt, **params)
+        return self.generate(prompt, timeout=timeout, **params)
 
     def generate_rag_with_metrics(
         self,
         query: str,
         retrieved_chunks: list[dict],
+        timeout: Optional[float] = None,
         **params: Any,
     ) -> dict[str, Any]:
         """Format prompt from template + query + chunks, generate with metrics.
@@ -812,6 +824,7 @@ class LlamaServer:
         Args:
             query: The user's query.
             retrieved_chunks: List of chunk dicts with 'text' key.
+            timeout: Per-request timeout in seconds.
             **params: Override generation parameters.
 
         Returns:
@@ -821,7 +834,7 @@ class LlamaServer:
             self.load_template()
 
         prompt = format_prompt(self._template, query, retrieved_chunks)
-        return self.generate_with_metrics(prompt, **params)
+        return self.generate_with_metrics(prompt, timeout=timeout, **params)
 
 
 # ---------------------------------------------------------------------------

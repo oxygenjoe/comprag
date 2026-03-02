@@ -460,9 +460,113 @@ class EvalRunner:
         # simulated tiers; None means no tier-specific overrides)
         self._current_tier_config: Optional[dict] = None
 
+        # Timeout / retry config (overridable via set_timeout_config for
+        # --matrix mode; defaults match existing constants)
+        self._timeout_load_s: float = _SERVER_STARTUP_TIMEOUT  # 180s
+        self._timeout_gen_s: Optional[float] = None  # None = use generator default (300s)
+        self._max_retries: int = _SERVER_RESTART_ATTEMPTS  # 1
+
         # Hardware metadata (cached once)
         self.hardware_meta = get_hardware_meta()
         logger.info("EvalRunner initialized (hardware: %s)", self.hardware_meta.get("gpu"))
+
+    # --- Timeout / retry configuration ---
+
+    def set_timeout_config(
+        self,
+        timeout_load_s: Optional[float] = None,
+        timeout_gen_s: Optional[float] = None,
+        max_retries: Optional[int] = None,
+    ) -> None:
+        """Override timeout and retry settings (typically from run_matrix.yaml).
+
+        When running in ``--matrix`` mode, the caller reads ``eval_config``
+        from the matrix YAML and passes the values here.  When any argument
+        is ``None`` the existing default is preserved.
+
+        Args:
+            timeout_load_s: Max seconds to wait for llama-server /health
+                readiness after startup.  On timeout the load is classified
+                as ``TIMEOUT_LOAD``.
+            timeout_gen_s: Per-inference timeout in seconds.  Passed through
+                to ``LlamaServer.generate_with_metrics(timeout=...)``.
+                On timeout the query is classified as ``TIMEOUT_GEN``.
+            max_retries: Number of times to retry a failed server load
+                before giving up and advancing to the next combo.
+        """
+        if timeout_load_s is not None:
+            self._timeout_load_s = float(timeout_load_s)
+            logger.info("Load timeout set to %.0fs", self._timeout_load_s)
+        if timeout_gen_s is not None:
+            self._timeout_gen_s = float(timeout_gen_s)
+            logger.info("Generation timeout set to %.0fs", self._timeout_gen_s)
+        if max_retries is not None:
+            self._max_retries = int(max_retries)
+            logger.info("Max retries set to %d", self._max_retries)
+
+    # --- Tier config and hardware metadata ---
+
+    def set_tier_config(self, tier_config: Optional[dict]) -> None:
+        """Set the current tier configuration for simulated tier tagging.
+
+        When a tier_config is set, ``_build_hardware_meta()`` merges its
+        fields (physical_gpu, simulated, vram_limit_mb, note) into the
+        base hardware metadata from ``get_hardware_meta()``.
+
+        Args:
+            tier_config: Dict from run_matrix.yaml tier entry, or None
+                to clear. Expected keys for simulated tiers:
+                ``physical_gpu``, ``simulated``, ``vram_limit_mb``.
+        """
+        self._current_tier_config = tier_config
+        if tier_config:
+            logger.info(
+                "Tier config set: physical_gpu=%s, simulated=%s, vram_limit_mb=%s",
+                tier_config.get("physical_gpu", "N/A"),
+                tier_config.get("simulated", False),
+                tier_config.get("vram_limit_mb", "N/A"),
+            )
+        else:
+            logger.debug("Tier config cleared")
+
+    def _build_hardware_meta(self) -> dict:
+        """Build the hardware_meta dict for JSONL output records.
+
+        Merges the base hardware metadata (gpu, driver, framework, os)
+        from ``get_hardware_meta()`` with tier-specific fields when a
+        tier config is active:
+
+        - ``physical_gpu``: The actual GPU model (from tier config).
+        - ``simulated`` (bool): Whether this is a simulated VRAM tier.
+        - ``vram_limit_mb`` (int): VRAM cap in MB (simulated tiers only).
+        - ``note`` (str): Caveat about throughput (simulated tiers only).
+
+        For non-simulated tiers, only ``physical_gpu`` and ``simulated``
+        are added (no ``vram_limit_mb``, no ``note``).
+
+        Returns:
+            Dict suitable for the ``hardware_meta`` field in JSONL records.
+        """
+        meta = dict(self.hardware_meta)  # shallow copy of base {gpu, driver, framework, os}
+
+        if self._current_tier_config is not None:
+            tc = self._current_tier_config
+            meta["physical_gpu"] = tc.get("physical_gpu", meta.get("gpu", "unknown"))
+            meta["simulated"] = bool(tc.get("simulated", False))
+
+            if tc.get("simulated"):
+                vram_limit = tc.get("vram_limit_mb")
+                if vram_limit is not None:
+                    meta["vram_limit_mb"] = vram_limit
+                meta["note"] = (
+                    "Throughput metrics not representative "
+                    "— simulated VRAM constraint only"
+                )
+        else:
+            # No tier config — mark as non-simulated with no overrides
+            meta["simulated"] = False
+
+        return meta
 
     # --- Component accessors ---
 
@@ -550,6 +654,9 @@ class EvalRunner:
         parent process environment **before** launching the subprocess so
         the child inherits the constraint.
 
+        Uses ``self._timeout_load_s`` for the health-check deadline.  On
+        ``TimeoutError`` the failure is classified as ``TIMEOUT_LOAD``.
+
         Args:
             model_path: Path to the GGUF model file.
             n_gpu_layers: GPU layers to offload (-1=all, 0=CPU-only).
@@ -560,6 +667,12 @@ class EvalRunner:
 
         Returns:
             The started LlamaServer instance.
+
+        Raises:
+            TimeoutError: If the server does not become ready within
+                ``self._timeout_load_s`` seconds (classified as
+                ``TIMEOUT_LOAD``).
+            RuntimeError: If the server process exits before readiness.
         """
         self._stop_server()
 
@@ -570,17 +683,78 @@ class EvalRunner:
         server = LlamaServer(port=port)
         server.load_generation_params()
 
-        logger.info("Starting llama-server for model: %s", model_path)
+        logger.info(
+            "Starting llama-server for model: %s (load timeout=%.0fs)",
+            model_path, self._timeout_load_s,
+        )
         server.start(
             model_path,
             n_gpu_layers=n_gpu_layers,
             **server_kwargs,
         )
-        server.wait_ready(timeout=_SERVER_STARTUP_TIMEOUT)
+        server.wait_ready(timeout=self._timeout_load_s)
         logger.info("llama-server ready")
 
         self._server = server
         return server
+
+    def _start_server_with_retries(
+        self,
+        model_path: str,
+        n_gpu_layers: int = -1,
+        port: int = 8080,
+        tier_config: Optional[dict] = None,
+        **server_kwargs: Any,
+    ) -> LlamaServer:
+        """Start llama-server with retry logic for failed loads.
+
+        Wraps ``_start_server()`` with up to ``self._max_retries`` retries.
+        On each failure the server is stopped, a brief pause is taken, and
+        the load is reattempted.  ``TimeoutError`` from the health check is
+        classified as ``TIMEOUT_LOAD``.
+
+        Args:
+            model_path: Path to the GGUF model file.
+            n_gpu_layers: GPU layers to offload (-1=all, 0=CPU-only).
+            port: Server port.
+            tier_config: Optional run_matrix tier dict for VRAM limits.
+            **server_kwargs: Extra llama-server CLI arguments.
+
+        Returns:
+            The started LlamaServer instance.
+
+        Raises:
+            TimeoutError: If all attempts exhaust without readiness.
+            RuntimeError: If the server process exits during all attempts.
+            Exception: Any other unrecoverable startup error.
+        """
+        max_attempts = 1 + self._max_retries  # initial + retries
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self._start_server(
+                    model_path,
+                    n_gpu_layers=n_gpu_layers,
+                    port=port,
+                    tier_config=tier_config,
+                    **server_kwargs,
+                )
+            except (TimeoutError, RuntimeError) as e:
+                last_error = e
+                error_type = "TIMEOUT_LOAD" if isinstance(e, TimeoutError) else type(e).__name__
+                logger.warning(
+                    "Server load attempt %d/%d failed (%s): %s",
+                    attempt, max_attempts, error_type, e,
+                )
+                # Stop the partially-started server before retrying
+                self._stop_server()
+                if attempt < max_attempts:
+                    logger.info("Retrying server load in 2s...")
+                    time.sleep(2)
+
+        # All attempts exhausted
+        raise last_error  # type: ignore[misc]
 
     def _stop_server(self) -> None:
         """Stop the current llama-server if running.
@@ -690,6 +864,7 @@ class EvalRunner:
             "run_config": run_config,
             "perf": {},
             "metrics": {},
+            "hardware_meta": self._build_hardware_meta(),
             "timestamp": timestamp,
             "error": None,
         }
@@ -742,11 +917,47 @@ class EvalRunner:
                 )
 
             wall_start = time.monotonic()
-            gen_result = self._server.generate_with_metrics(
-                prompt,
-                seed=seed,
-                **_LOCKED_GEN_PARAMS,
-            )
+            try:
+                gen_result = self._server.generate_with_metrics(
+                    prompt,
+                    timeout=self._timeout_gen_s,
+                    seed=seed,
+                    **_LOCKED_GEN_PARAMS,
+                )
+            except Exception as gen_exc:
+                # Check for generation timeout (requests.Timeout or
+                # similar) and classify as TIMEOUT_GEN
+                import requests as _requests
+                if isinstance(gen_exc, (_requests.Timeout, TimeoutError)):
+                    wall_clock_sec = time.monotonic() - wall_start
+                    timeout_val = self._timeout_gen_s or "default"
+                    logger.error(
+                        "Generation timed out after %s sec (limit=%s): %s",
+                        f"{wall_clock_sec:.1f}", timeout_val, query[:60],
+                    )
+                    result_record["response"] = None
+                    result_record["error"] = _classify_error(
+                        gen_exc, error_hint="timeout_gen"
+                    )
+                    result_record["perf"] = {
+                        "ttft_ms": None,
+                        "total_tokens": None,
+                        "tokens_per_sec": None,
+                        "wall_clock_sec": round(wall_clock_sec, 3),
+                        "vram_mb": None,
+                        "gpu_temp": _get_gpu_temp(),
+                    }
+                    result_record["metrics"] = {
+                        "faithfulness": None,
+                        "context_utilization": None,
+                        "self_knowledge": None,
+                        "noise_sensitivity": None,
+                        "answer_relevancy": None,
+                        "negative_rejection_rate": None,
+                    }
+                    return result_record
+                # Not a timeout — re-raise for the outer handler
+                raise
             wall_clock_sec = time.monotonic() - wall_start
 
             generated_answer = gen_result["text"]
@@ -900,16 +1111,18 @@ class EvalRunner:
             len(queries), seeds, total_runs, output_path,
         )
 
-        # Start server if model path provided
+        # Start server if model path provided (with retry support)
         if model_path:
             try:
-                self._start_server(
+                self._start_server_with_retries(
                     model_path,
                     n_gpu_layers=n_gpu_layers,
                     port=port,
                     **server_kwargs,
                 )
             except Exception as e:
+                # Classify TimeoutError specifically as TIMEOUT_LOAD
+                error_hint = "timeout_load" if isinstance(e, TimeoutError) else None
                 logger.error("Failed to start server: %s", e)
                 # Log a single failure record in v2 format and return
                 fail_record = {
@@ -935,8 +1148,9 @@ class EvalRunner:
                         "gpu_temp": None,
                     },
                     "metrics": {},
+                    "hardware_meta": self._build_hardware_meta(),
                     "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "error": _classify_error(e),
+                    "error": _classify_error(e, error_hint=error_hint),
                 }
                 append_jsonl(output_path, fail_record)
                 return [fail_record]
@@ -1030,6 +1244,7 @@ class EvalRunner:
                                 "gpu_temp": None,
                             },
                             "metrics": {},
+                            "hardware_meta": self._build_hardware_meta(),
                             "timestamp": datetime.now(timezone.utc).strftime(
                                 "%Y-%m-%dT%H:%M:%SZ"
                             ),
@@ -1047,7 +1262,7 @@ class EvalRunner:
                         )
                         if model_path:
                             restarted = False
-                            for attempt in range(_SERVER_RESTART_ATTEMPTS):
+                            for attempt in range(self._max_retries):
                                 if self._restart_server(
                                     model_path,
                                     n_gpu_layers=n_gpu_layers,
@@ -1061,7 +1276,7 @@ class EvalRunner:
                                 logger.error(
                                     "Server restart failed after %d attempts. "
                                     "Stopping run.",
-                                    _SERVER_RESTART_ATTEMPTS,
+                                    self._max_retries,
                                 )
                                 crash_record = {
                                     "sample_id": str(query_id),
@@ -1086,11 +1301,12 @@ class EvalRunner:
                                         "gpu_temp": None,
                                     },
                                     "metrics": {},
+                                    "hardware_meta": self._build_hardware_meta(),
                                     "timestamp": datetime.now(timezone.utc).strftime(
                                         "%Y-%m-%dT%H:%M:%SZ"
                                     ),
                                     "error": f"server_crash: restart failed after "
-                                             f"{_SERVER_RESTART_ATTEMPTS} attempts: {server_err}",
+                                             f"{self._max_retries} attempts: {server_err}",
                                 }
                                 append_jsonl(output_path, crash_record)
                                 all_results.append(crash_record)
@@ -1229,6 +1445,7 @@ class EvalRunner:
                         "gpu_temp": None,
                     },
                     "metrics": {},
+                    "hardware_meta": self._build_hardware_meta(),
                     "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "error": _classify_error(e),
                 }
