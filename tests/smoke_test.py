@@ -1691,6 +1691,165 @@ def check_p4_visualize_demo_produces_charts() -> Optional[str]:
 
 
 # ===================================================================
+# CHECK 27: Phase 5 — config/run_matrix.yaml validity
+# ===================================================================
+
+
+def check_p5_run_matrix_exists_and_parses() -> Optional[str]:
+    """Verify config/run_matrix.yaml exists and parses as valid YAML."""
+    import yaml
+
+    matrix_path = _PROJECT_ROOT / "config" / "run_matrix.yaml"
+    if not matrix_path.exists():
+        return f"config/run_matrix.yaml not found at {matrix_path}"
+
+    try:
+        with open(matrix_path) as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        return f"config/run_matrix.yaml is not valid YAML: {e}"
+
+    if not isinstance(data, dict):
+        return f"run_matrix.yaml root should be dict, got {type(data).__name__}"
+    if "tiers" not in data:
+        return "run_matrix.yaml missing top-level 'tiers' key"
+
+    return None
+
+
+def check_p5_run_matrix_tiers() -> Optional[str]:
+    """Verify run_matrix.yaml has the expected 7 hardware tiers."""
+    import yaml
+
+    matrix_path = _PROJECT_ROOT / "config" / "run_matrix.yaml"
+    if not matrix_path.exists():
+        return f"config/run_matrix.yaml not found"
+
+    with open(matrix_path) as f:
+        data = yaml.safe_load(f)
+
+    tiers = data.get("tiers", {})
+    expected = [
+        "v100_32gb", "v100_16gb_sim", "v100_12gb_sim",
+        "v100_8gb_sim", "v100_6gb_sim", "1660s", "m4000",
+    ]
+    missing = [t for t in expected if t not in tiers]
+    if missing:
+        return f"run_matrix.yaml missing tiers: {missing}"
+
+    unexpected = [t for t in tiers if t not in expected]
+    if unexpected:
+        return f"run_matrix.yaml has unexpected tiers: {unexpected}"
+
+    # Each tier must have a non-empty models list with quants
+    for tier_name, tier_data in tiers.items():
+        models = tier_data.get("models")
+        if not models or not isinstance(models, list):
+            return f"Tier '{tier_name}' has no models list"
+        for i, model in enumerate(models):
+            quants = model.get("quants")
+            if not quants or not isinstance(quants, list):
+                return f"Tier '{tier_name}' model {i} has no quants list"
+
+    return None
+
+
+def check_p5_run_matrix_combo_count() -> Optional[str]:
+    """Verify total model/quant combo count across all tiers."""
+    import yaml
+
+    matrix_path = _PROJECT_ROOT / "config" / "run_matrix.yaml"
+    if not matrix_path.exists():
+        return f"config/run_matrix.yaml not found"
+
+    with open(matrix_path) as f:
+        data = yaml.safe_load(f)
+
+    tiers = data.get("tiers", {})
+    total = 0
+    for tier_data in tiers.values():
+        for model in tier_data.get("models", []):
+            total += len(model.get("quants", []))
+
+    # Expect a reasonable number of combos (at least 50)
+    if total < 50:
+        return f"Total combo count is {total}, expected >= 50"
+
+    return None
+
+
+# ===================================================================
+# CHECK 28: Phase 5 — Runner Phase 5 functions importable
+# ===================================================================
+
+
+def check_p5_runner_functions_importable() -> Optional[str]:
+    """Verify apply_vram_limit, clear_vram_limit, check_headless, load_run_matrix are importable."""
+    from cumrag.runner import apply_vram_limit, clear_vram_limit, check_headless, load_run_matrix
+
+    for name, fn in [
+        ("apply_vram_limit", apply_vram_limit),
+        ("clear_vram_limit", clear_vram_limit),
+        ("check_headless", check_headless),
+        ("load_run_matrix", load_run_matrix),
+    ]:
+        if not callable(fn):
+            return f"{name} is not callable"
+
+    return None
+
+
+# ===================================================================
+# CHECK 29: Phase 5 — Generator timeout parameter
+# ===================================================================
+
+
+def check_p5_generator_timeout_param() -> Optional[str]:
+    """Verify LlamaServer.generate() and generate_with_metrics() accept timeout."""
+    from cumrag.generator import LlamaServer
+
+    for method_name in ("generate", "generate_with_metrics"):
+        method = getattr(LlamaServer, method_name, None)
+        if method is None:
+            return f"LlamaServer missing method: {method_name}"
+        sig = inspect.signature(method)
+        if "timeout" not in sig.parameters:
+            return f"LlamaServer.{method_name}() missing 'timeout' parameter"
+
+    return None
+
+
+# ===================================================================
+# CHECK 30: Phase 5 — --matrix CLI flag in argument parser
+# ===================================================================
+
+
+def check_p5_matrix_cli_flag() -> Optional[str]:
+    """Verify --matrix flag is accepted by parse_args (with --hardware-tier)."""
+    from cumrag.runner import parse_args
+
+    # Parse a synthetic --matrix invocation (should not error)
+    try:
+        args = parse_args([
+            "--matrix", "config/run_matrix.yaml",
+            "--hardware-tier", "v100_32gb",
+        ])
+    except SystemExit as e:
+        return f"parse_args rejected --matrix --hardware-tier: exit code {e.code}"
+
+    if not hasattr(args, "matrix"):
+        return "parse_args result missing 'matrix' attribute"
+    if args.matrix != "config/run_matrix.yaml":
+        return f"args.matrix should be 'config/run_matrix.yaml', got '{args.matrix}'"
+    if not hasattr(args, "hardware_tier"):
+        return "parse_args result missing 'hardware_tier' attribute"
+    if args.hardware_tier != "v100_32gb":
+        return f"args.hardware_tier should be 'v100_32gb', got '{args.hardware_tier}'"
+
+    return None
+
+
+# ===================================================================
 # OPTIONAL LIVE TEST
 # ===================================================================
 
@@ -2012,6 +2171,28 @@ def main() -> int:
     _run_check("p4.scripts.visualize_results.help", check_p4_visualize_results_help)
     _run_check("p4.scripts.run_pipeline.help", check_p4_run_pipeline_help)
     _run_check("p4.scripts.visualize_results.demo_charts", check_p4_visualize_demo_produces_charts)
+    print()
+
+    # --- Phase 5: Run matrix config ---
+    print("[27/31] Phase 5 — run_matrix.yaml validation")
+    _run_check("p5.config.run_matrix.exists", check_p5_run_matrix_exists_and_parses)
+    _run_check("p5.config.run_matrix.tiers", check_p5_run_matrix_tiers)
+    _run_check("p5.config.run_matrix.combo_count", check_p5_run_matrix_combo_count)
+    print()
+
+    # --- Phase 5: Runner functions importable ---
+    print("[28/31] Phase 5 — Runner Phase 5 functions importable")
+    _run_check("p5.runner.functions_importable", check_p5_runner_functions_importable)
+    print()
+
+    # --- Phase 5: Generator timeout parameter ---
+    print("[29/31] Phase 5 — Generator timeout parameter")
+    _run_check("p5.generator.timeout_param", check_p5_generator_timeout_param)
+    print()
+
+    # --- Phase 5: --matrix CLI flag ---
+    print("[30/31] Phase 5 — --matrix CLI flag in argument parser")
+    _run_check("p5.runner.matrix_cli_flag", check_p5_matrix_cli_flag)
     print()
 
     # --- Live test (optional) ---
