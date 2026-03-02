@@ -290,8 +290,13 @@ class LlamaServer:
                 return  # Port is free
 
             pids = result.stdout.strip().split("\n")
+            own_pid = os.getpid()
             for pid_str in pids:
                 pid = int(pid_str.strip())
+                # Skip our own process (lsof can report the runner
+                # if it had an HTTP connection to a previous server)
+                if pid == own_pid:
+                    continue
                 # Identify the process
                 try:
                     cmdline_path = f"/proc/{pid}/cmdline"
