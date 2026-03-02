@@ -18,6 +18,7 @@ CLI:
 
 import argparse
 import json
+import os
 import signal
 import sys
 import time
@@ -66,6 +67,73 @@ _SERVER_RESTART_ATTEMPTS = 1
 
 
 # ---------------------------------------------------------------------------
+# VRAM limit management (simulated tiers)
+# ---------------------------------------------------------------------------
+
+
+def apply_vram_limit(tier_config: dict) -> None:
+    """Set CUDA_MEM_LIMIT_0 env var for simulated VRAM tiers.
+
+    When a tier has ``simulated: true`` and ``vram_limit_mb`` set, this sets
+    the ``CUDA_MEM_LIMIT_0`` environment variable so that any subsequently
+    launched CUDA subprocess (e.g. llama-server) inherits the constraint.
+    The CUDA 12+ runtime will return ``cudaErrorMemoryAllocation`` at the cap.
+
+    When the tier is *not* simulated, any previously set limit is cleared to
+    prevent leaking constraints between tier switches.
+
+    Args:
+        tier_config: Dict from run_matrix.yaml tier entry. Expected keys:
+            - ``simulated`` (bool): Whether this is a simulated VRAM tier.
+            - ``vram_limit_mb`` (int): VRAM cap in megabytes.
+    """
+    if tier_config.get("simulated") and tier_config.get("vram_limit_mb"):
+        limit = tier_config["vram_limit_mb"]
+        os.environ["CUDA_MEM_LIMIT_0"] = f"{limit}MB"
+        logger.info("VRAM limit set: CUDA_MEM_LIMIT_0=%sMB (simulated tier)", limit)
+    else:
+        clear_vram_limit()
+
+
+def clear_vram_limit() -> None:
+    """Remove CUDA_MEM_LIMIT_0 from the process environment.
+
+    Called in ``_stop_server()`` and when switching to a non-simulated tier
+    to prevent VRAM constraints from leaking to subsequent runs.
+    """
+    removed = os.environ.pop("CUDA_MEM_LIMIT_0", None)
+    if removed is not None:
+        logger.info("VRAM limit cleared (was %s)", removed)
+
+
+# ---------------------------------------------------------------------------
+# Headless display check
+# ---------------------------------------------------------------------------
+
+# Tiers where a compositor eating VRAM is a real concern (<=6GB)
+_LOW_VRAM_TIERS = {"1660s", "v100_6gb_sim"}
+
+
+def check_headless() -> None:
+    """Warn if a display server is detected that may reserve VRAM.
+
+    On 6GB GPUs the X11/Wayland compositor typically reserves 0.5-1.0GB,
+    which can push boundary combos into OOM.  This is advisory only and
+    does NOT block execution.
+    """
+    display = os.environ.get("DISPLAY")
+    wayland = os.environ.get("WAYLAND_DISPLAY")
+    if display or wayland:
+        logger.warning(
+            "Display server detected (DISPLAY=%s, WAYLAND=%s). "
+            "On 6GB GPUs, the compositor reserves 0.5-1.0GB VRAM. "
+            "Run headless for accurate results.",
+            display,
+            wayland,
+        )
+
+
+# ---------------------------------------------------------------------------
 # GPU temperature helper
 # ---------------------------------------------------------------------------
 
@@ -102,17 +170,24 @@ def _get_gpu_temp() -> Optional[int]:
 # ---------------------------------------------------------------------------
 
 
-def _classify_error(exc: Exception) -> str:
+def _classify_error(exc: Exception, error_hint: Optional[str] = None) -> str:
     """Classify an exception into a v2 error string: 'error_type: description'.
 
     Args:
         exc: The exception to classify.
+        error_hint: Optional explicit error type override. When provided,
+            uses this as the error type prefix instead of inferring from
+            the exception. Valid hints: 'timeout_load', 'timeout_gen'.
 
     Returns:
         Formatted error string like 'connection_refused: description'.
     """
     exc_type = type(exc).__name__
     msg = str(exc)
+
+    # Explicit error type overrides (for timeout support)
+    if error_hint in ("timeout_load", "timeout_gen"):
+        return f"{error_hint}: {msg}"
 
     if isinstance(exc, ConnectionError):
         return f"connection_refused: {msg}"
@@ -381,6 +456,10 @@ class EvalRunner:
         self._evaluator: Optional[CombinedEvaluator] = None
         self._template: Optional[str] = None
 
+        # Current tier config (set via set_tier_config() before running
+        # simulated tiers; None means no tier-specific overrides)
+        self._current_tier_config: Optional[dict] = None
+
         # Hardware metadata (cached once)
         self.hardware_meta = get_hardware_meta()
         logger.info("EvalRunner initialized (hardware: %s)", self.hardware_meta.get("gpu"))
@@ -461,13 +540,32 @@ class EvalRunner:
         model_path: str,
         n_gpu_layers: int = -1,
         port: int = 8080,
+        tier_config: Optional[dict] = None,
         **server_kwargs: Any,
     ) -> LlamaServer:
         """Start llama-server for a model. Returns the LlamaServer instance.
 
-        Stops any existing server first.
+        Stops any existing server first. If *tier_config* is provided and
+        describes a simulated VRAM tier, sets ``CUDA_MEM_LIMIT_0`` in the
+        parent process environment **before** launching the subprocess so
+        the child inherits the constraint.
+
+        Args:
+            model_path: Path to the GGUF model file.
+            n_gpu_layers: GPU layers to offload (-1=all, 0=CPU-only).
+            port: Server port.
+            tier_config: Optional run_matrix tier dict with ``simulated``
+                and ``vram_limit_mb`` keys for VRAM limit management.
+            **server_kwargs: Extra llama-server CLI arguments.
+
+        Returns:
+            The started LlamaServer instance.
         """
         self._stop_server()
+
+        # Apply VRAM limit BEFORE subprocess launch so the child inherits it
+        if tier_config is not None:
+            apply_vram_limit(tier_config)
 
         server = LlamaServer(port=port)
         server.load_generation_params()
@@ -485,22 +583,37 @@ class EvalRunner:
         return server
 
     def _stop_server(self) -> None:
-        """Stop the current llama-server if running."""
+        """Stop the current llama-server if running.
+
+        Also clears any ``CUDA_MEM_LIMIT_0`` env var to prevent VRAM
+        constraints from leaking to the next tier's subprocess.
+        """
         if self._server is not None:
             logger.info("Stopping llama-server...")
             self._server.stop()
             self._server = None
+        clear_vram_limit()
 
     def _restart_server(
         self,
         model_path: str,
         n_gpu_layers: int = -1,
         port: int = 8080,
+        tier_config: Optional[dict] = None,
         **server_kwargs: Any,
     ) -> bool:
         """Attempt to restart the server after a crash.
 
-        Returns True if restart succeeded, False otherwise.
+        Args:
+            model_path: Path to the GGUF model file.
+            n_gpu_layers: GPU layers to offload (-1=all, 0=CPU-only).
+            port: Server port.
+            tier_config: Optional run_matrix tier dict for VRAM limit
+                management (passed through to ``_start_server``).
+            **server_kwargs: Extra llama-server CLI arguments.
+
+        Returns:
+            True if restart succeeded, False otherwise.
         """
         logger.warning("Attempting server restart...")
         try:
@@ -510,6 +623,7 @@ class EvalRunner:
                 model_path,
                 n_gpu_layers=n_gpu_layers,
                 port=port,
+                tier_config=tier_config,
                 **server_kwargs,
             )
             return True
@@ -746,6 +860,10 @@ class EvalRunner:
         """
         seeds = seeds or _DEFAULT_SEEDS
         server_kwargs = server_kwargs or {}
+
+        # Warn about display server on low-VRAM tiers
+        if hardware_tier in _LOW_VRAM_TIERS:
+            check_headless()
 
         # Extract model info
         if model_path:
