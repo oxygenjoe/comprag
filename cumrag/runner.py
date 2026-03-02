@@ -300,7 +300,28 @@ def load_run_matrix(
     # Generate seeds from runs_per_combo
     seeds = list(range(42, 42 + runs_per_combo))
 
-    # Build combinations: model x quant x dataset
+    # Expand high-level dataset names into (dataset, eval_subset) pairs
+    # that match the collection keys in eval_config.yaml.
+    # "rgb" has 4 sub-collections; "nq" maps to "nq_wiki"; "halueval" is flat.
+    _DATASET_EXPANSION: dict[str, list[tuple[str, Optional[str]]]] = {
+        "rgb": [
+            ("rgb", "noise_robustness"),
+            ("rgb", "negative_rejection"),
+            ("rgb", "information_integration"),
+            ("rgb", "counterfactual_robustness"),
+        ],
+        "nq": [("nq", "wiki")],
+        "halueval": [("halueval", None)],
+    }
+
+    expanded_datasets: list[tuple[str, Optional[str]]] = []
+    for ds in datasets:
+        if ds in _DATASET_EXPANSION:
+            expanded_datasets.extend(_DATASET_EXPANSION[ds])
+        else:
+            expanded_datasets.append((ds, None))
+
+    # Build combinations: model x quant x dataset(+subset)
     combinations: list[dict] = []
     models_list = tier_config.get("models", [])
 
@@ -313,10 +334,11 @@ def load_run_matrix(
                 model_name, quant, models_dir=models_dir,
             )
 
-            for dataset in datasets:
+            for dataset, eval_subset in expanded_datasets:
                 combo: dict[str, Any] = {
                     "model_path": model_path,
                     "dataset": dataset,
+                    "eval_subset": eval_subset,
                     "hardware_tier": hardware_tier,
                     "num_queries": num_queries,
                     "seeds": seeds,
