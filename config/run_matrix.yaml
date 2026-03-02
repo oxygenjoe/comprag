@@ -1,0 +1,115 @@
+# CUMRAG Phase 1 Run Matrix v3
+# All CUDA. MI25/ROCm deferred. Simulated VRAM tiers on V100.
+# V100 32GB is superset of all tiers.
+
+phase: 1
+
+eval_config:
+  timeout_load_s: 120
+  timeout_gen_s: 30
+  max_retries: 1
+
+tiers:
+  v100_32gb:
+    description: "Reference Tier — V100 SXM2 32GB, no VRAM constraint"
+    physical_gpu: V100-SXM2-32GB
+    simulated: false
+    models:
+      - name: Qwen2.5-14B-Instruct
+        quants: [Q4_K_M, Q8_0, FP16]
+      - name: Llama-3.1-8B-Instruct
+        quants: [Q4_K_M, Q8_0, FP16]
+      - name: Mistral-NeMo-12B-Instruct
+        quants: [Q4_K_M, Q8_0, FP16]
+      - name: Qwen2.5-7B-Instruct
+        quants: [Q4_K_M, Q8_0, FP16]
+      - name: SmolLM2-1.7B-Instruct
+        quants: [Q4_K_M, Q8_0, FP16]
+
+  v100_16gb_sim:
+    description: "V100 32GB constrained to 16GB via CUDA_MEM_LIMIT"
+    physical_gpu: V100-SXM2-32GB
+    simulated: true
+    vram_limit_mb: 16384
+    models:
+      - name: Qwen2.5-14B-Instruct
+        quants: [Q4_K_M, Q8_0]
+      - name: Llama-3.1-8B-Instruct
+        quants: [Q4_K_M, Q8_0, FP16]
+      - name: Mistral-NeMo-12B-Instruct
+        quants: [Q4_K_M, Q8_0]
+      - name: Qwen2.5-7B-Instruct
+        quants: [Q4_K_M, Q8_0, FP16]
+      - name: SmolLM2-1.7B-Instruct
+        quants: [Q4_K_M, Q8_0, FP16]
+
+  v100_12gb_sim:
+    description: "V100 32GB constrained to 12GB via CUDA_MEM_LIMIT"
+    physical_gpu: V100-SXM2-32GB
+    simulated: true
+    vram_limit_mb: 12288
+    models:
+      - name: Qwen2.5-14B-Instruct
+        quants: [Q4_K_M]
+      - name: Llama-3.1-8B-Instruct
+        quants: [Q4_K_M, Q8_0]
+      - name: Mistral-NeMo-12B-Instruct
+        quants: [Q4_K_M]
+      - name: Qwen2.5-7B-Instruct
+        quants: [Q4_K_M, Q8_0]
+      - name: SmolLM2-1.7B-Instruct
+        quants: [Q4_K_M, Q8_0, FP16]
+
+  v100_8gb_sim:
+    description: "V100 32GB constrained to 8GB — matches M4000 physical VRAM"
+    physical_gpu: V100-SXM2-32GB
+    simulated: true
+    vram_limit_mb: 8192
+    models:
+      - name: Llama-3.1-8B-Instruct
+        quants: [Q4_K_M, Q8_0]
+      - name: Qwen2.5-7B-Instruct
+        quants: [Q4_K_M, Q8_0]
+      - name: SmolLM2-1.7B-Instruct
+        quants: [Q4_K_M, Q8_0]
+
+  v100_6gb_sim:
+    description: "V100 32GB constrained to 6GB — matches 1660S physical VRAM"
+    physical_gpu: V100-SXM2-32GB
+    simulated: true
+    vram_limit_mb: 6144
+    models:
+      - name: Llama-3.1-8B-Instruct
+        quants: [Q4_K_M]
+      - name: Qwen2.5-7B-Instruct
+        quants: [Q4_K_M]
+      - name: SmolLM2-1.7B-Instruct
+        quants: [Q4_K_M, Q8_0, FP16]
+
+  1660s:
+    description: "Consumer Tier — 1660 Super 6GB. MUST run headless."
+    physical_gpu: GTX-1660-Super-6GB
+    simulated: false
+    models:
+      - name: Llama-3.1-8B-Instruct
+        quants: [Q4_K_M]
+      - name: Qwen2.5-7B-Instruct
+        quants: [Q4_K_M]
+      - name: SmolLM2-1.7B-Instruct
+        quants: [Q4_K_M, Q8_0, FP16]
+
+  m4000:
+    description: "Maxwell Legacy Tier — Quadro M4000 8GB. No FP16."
+    physical_gpu: Quadro-M4000-8GB
+    simulated: false
+    models:
+      - name: Llama-3.1-8B-Instruct
+        quants: [Q4_K_M, Q8_0]
+      - name: Qwen2.5-7B-Instruct
+        quants: [Q4_K_M, Q8_0]
+      - name: SmolLM2-1.7B-Instruct
+        quants: [Q4_K_M, Q8_0]
+
+datasets: [rgb, nq, halueval]
+runs_per_combo: 3
+num_queries: 500
