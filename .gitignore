@@ -29,3 +29,10 @@ Thumbs.db
 
 # Environment
 .env
+
+# Claude Code
+.claude/
+
+# Working docs
+comprag-spec.md
+reviews and requests/
