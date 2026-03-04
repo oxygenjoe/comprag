@@ -4,7 +4,7 @@
 Validates all ChromaDB collections in the index directory against
 eval_config.yaml parameters, checks sample entries for valid fields,
 runs test queries, and calls the existing validate_index() from
-cumrag.retriever.
+comprag.retriever.
 
 Standalone:
     python scripts/validate_index.py
@@ -21,17 +21,17 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-# Ensure project root is on sys.path so cumrag package is importable
+# Ensure project root is on sys.path so comprag package is importable
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 import chromadb
 
-from cumrag.retriever import validate_index as retriever_validate_index
-from cumrag.utils import get_logger, load_config, setup_logging
+from comprag.retriever import validate_index as retriever_validate_index
+from comprag.utils import get_logger, load_config, setup_logging
 
-logger = get_logger("cumrag.validate_index")
+logger = get_logger("comprag.validate_index")
 
 # ---------------------------------------------------------------------------
 # Expected config keys to check in collection metadata
@@ -221,7 +221,7 @@ def _check_query(
 def _check_retriever_validate(
     collection: chromadb.Collection, config: dict
 ) -> tuple[bool, str]:
-    """Call the existing validate_index() from cumrag.retriever.
+    """Call the existing validate_index() from comprag.retriever.
 
     Returns:
         (ok, error_string_or_empty)

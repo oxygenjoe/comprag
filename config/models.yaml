@@ -1,6 +1,6 @@
 # CUMRAG Model Registry
 # All models in GGUF format from HuggingFace (bartowski or official quants)
-# Reference: cumrag-spec.md Model Matrix
+# Reference: comprag-spec.md Model Matrix
 
 models:
   qwen2.5-14b-instruct:

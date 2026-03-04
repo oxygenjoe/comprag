@@ -46,9 +46,9 @@ _PROJECT_ROOT = _SCRIPT_DIR.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from cumrag.utils import Timer, get_hardware_meta, get_logger, setup_logging
+from comprag.utils import Timer, get_hardware_meta, get_logger, setup_logging
 
-logger = get_logger("cumrag.pipeline")
+logger = get_logger("comprag.pipeline")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -528,7 +528,7 @@ def _step_run(force: bool, dry_run: bool) -> StepResult:
         result.error = "Real evaluation requires llama.cpp server (not implemented in pipeline yet)"
         result.message = (
             "Use --dry-run for synthetic results, or run "
-            "cumrag.runner directly for real evaluation"
+            "comprag.runner directly for real evaluation"
         )
 
     return result
@@ -562,7 +562,7 @@ def _step_aggregate(force: bool, dry_run: bool) -> StepResult:
         return result
 
     try:
-        from cumrag.aggregator import run_aggregation
+        from comprag.aggregator import run_aggregation
 
         agg_result = run_aggregation(
             input_path=str(RAW_RESULTS_DIR),

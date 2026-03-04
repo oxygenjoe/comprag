@@ -11,7 +11,7 @@ V100 due to VRAM limits — the scoring pipeline is strictly sequential:
 stop gen server -> start judge server -> score -> stop judge server.
 
 Importable as module; CLI mode to evaluate a single JSONL file:
-    python -m cumrag.evaluator --input results/raw/run.jsonl --output results/raw/scored.jsonl
+    python -m comprag.evaluator --input results/raw/run.jsonl --output results/raw/scored.jsonl
 
 Classes:
     RAGASEvaluator: RAGAS framework wrapper (faithfulness, answer_relevancy, etc.)
@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Union
 
-from cumrag.utils import (
+from comprag.utils import (
     Timer,
     append_jsonl,
     get_logger,
@@ -36,7 +36,7 @@ from cumrag.utils import (
     read_jsonl,
 )
 
-logger = get_logger("cumrag.evaluator")
+logger = get_logger("comprag.evaluator")
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_MODELS_DIR = _PROJECT_ROOT / "models"
@@ -321,7 +321,7 @@ def start_judge_server(
         TimeoutError: If judge server doesn't become ready.
         RuntimeError: If server fails to start.
     """
-    from cumrag.generator import LlamaServer
+    from comprag.generator import LlamaServer
 
     gguf_path = _resolve_judge_gguf(
         judge_config,
@@ -381,7 +381,7 @@ def stop_generation_server(
         logger.info("Generation server stopped")
     else:
         # Try to clean up orphaned process on gen port
-        from cumrag.generator import LlamaServer
+        from comprag.generator import LlamaServer
         temp = LlamaServer(port=_GEN_PORT)
         temp._check_port_available(_GEN_PORT)
 
@@ -1212,7 +1212,7 @@ def main() -> None:
 
     Usage::
 
-        python -m cumrag.evaluator \\
+        python -m comprag.evaluator \\
             --input results/raw/run.jsonl \\
             --output results/raw/scored.jsonl \\
             --batch-size 10
@@ -1262,7 +1262,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # Setup logging
-    from cumrag.utils import setup_logging
+    from comprag.utils import setup_logging
     setup_logging(level=getattr(logging, args.log_level))
 
     # Load judge config from eval_config.yaml

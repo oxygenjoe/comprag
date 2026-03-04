@@ -111,7 +111,7 @@ class CollectionInfo:
     chunk_overlap_words: int = 0
     created_at: str = ""
     dataset: str = ""
-    cumrag_version: str = ""
+    comprag_version: str = ""
 
 
 @dataclass
@@ -278,7 +278,7 @@ def collect_collection_info(index_dir: Path) -> list[CollectionInfo]:
                 chunk_overlap_words=int(meta.get("chunk_overlap_words", 0)),
                 created_at=str(meta.get("created_at", "")),
                 dataset=str(meta.get("dataset", "")),
-                cumrag_version=str(meta.get("cumrag_version", "")),
+                comprag_version=str(meta.get("comprag_version", "")),
             )
             results.append(ci)
         except Exception:
@@ -469,8 +469,8 @@ def _print_collections_table(collections: list[CollectionInfo]) -> None:
                 parts.append(f"dataset={c.dataset}")
             if c.created_at:
                 parts.append(f"created={c.created_at}")
-            if c.cumrag_version:
-                parts.append(f"version={c.cumrag_version}")
+            if c.comprag_version:
+                parts.append(f"version={c.comprag_version}")
             if parts:
                 print(f"    {c.name}: {', '.join(parts)}")
 

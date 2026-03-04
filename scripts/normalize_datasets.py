@@ -30,9 +30,9 @@ _PROJECT_ROOT = _SCRIPT_DIR.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from cumrag.utils import get_logger, setup_logging, timer
+from comprag.utils import get_logger, setup_logging, timer
 
-logger = get_logger("cumrag.normalize_datasets")
+logger = get_logger("comprag.normalize_datasets")
 
 # ---------------------------------------------------------------------------
 # Constants

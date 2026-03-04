@@ -17,8 +17,8 @@ Skip in fast CI:
 
 import pytest
 
-from cumrag.retriever import Retriever, resolve_collection_name, validate_index
-from cumrag.utils import load_config
+from comprag.retriever import Retriever, resolve_collection_name, validate_index
+from comprag.utils import load_config
 
 # ---------------------------------------------------------------------------
 # Fixtures

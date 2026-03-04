@@ -1,5 +1,5 @@
 # CUMRAG Hardware Tier Definitions
-# Reference: cumrag-spec.md Hardware Matrix
+# Reference: comprag-spec.md Hardware Matrix
 
 hardware_tiers:
   v100:

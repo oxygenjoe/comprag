@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 # ---------------------------------------------------------------------------
-# Ensure cumrag package is importable when running as standalone script
+# Ensure comprag package is importable when running as standalone script
 # ---------------------------------------------------------------------------
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -34,7 +34,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 import yaml  # noqa: E402
 
-from cumrag.utils import (  # noqa: E402
+from comprag.utils import (  # noqa: E402
     _get_cpu_info,
     _get_driver_info,
     _get_framework_info,
@@ -48,7 +48,7 @@ from cumrag.utils import (  # noqa: E402
     get_logger,
 )
 
-logger = get_logger("cumrag.profile_hardware")
+logger = get_logger("comprag.profile_hardware")
 
 # ---------------------------------------------------------------------------
 # Extended detection helpers (beyond what utils.py provides)

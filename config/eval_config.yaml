@@ -1,5 +1,5 @@
 # CUMRAG Evaluation Configuration
-# Reference: cumrag-spec.md, cumrag-claude-code-guide-v2.md
+# Reference: comprag-spec.md, comprag-claude-code-guide-v2.md
 # All parameters locked across runs for reproducibility.
 
 # Dataset paths (relative to project root)
@@ -78,6 +78,24 @@ statistics:
   bootstrap_resamples: 1000
   confidence_level: 0.95
   ci_width_flag_threshold: 0.15  # Flag if CI width > 15% of mean
+
+# Three-pass evaluation protocol
+passes:
+  pass1_baseline:
+    template: "config/prompt_pass1_baseline.txt"
+    include_context: false
+  pass2_loose:
+    template: "config/prompt_pass2_loose.txt"
+    include_context: true
+  pass3_strict:
+    template: "config/prompt_pass3_strict.txt"
+    include_context: true
+
+# Pass policy: which passes to run per dataset subset
+# "all" means [pass1_baseline, pass2_loose, pass3_strict]
+pass_policy:
+  rgb_counterfactual_robustness: all
+  default: [pass2_loose]
 
 # Output paths (relative to project root)
 output:

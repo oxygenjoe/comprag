@@ -6,14 +6,14 @@ pipeline is CONSTANT across all eval runs — same embedding model, same index,
 same parameters. Only the generator model varies.
 
 Usage (module):
-    from cumrag.retriever import Retriever
+    from comprag.retriever import Retriever
     r = Retriever(index_dir="index", dataset="rgb")
     results = r.retrieve("What is the capital of France?", top_k=5)
     context = r.format_context(results)
 
 Usage (CLI):
-    python -m cumrag.retriever --query "What is France?" --dataset rgb --top-k 5
-    python -m cumrag.retriever --dataset rgb --info
+    python -m comprag.retriever --query "What is France?" --dataset rgb --top-k 5
+    python -m comprag.retriever --dataset rgb --info
 """
 
 import argparse
@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from cumrag.utils import get_logger, load_config, make_collection_name, setup_logging
+from comprag.utils import get_logger, load_config, make_collection_name, setup_logging
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -42,7 +42,7 @@ def _get_default_embedding_model() -> str:
     except (FileNotFoundError, KeyError):
         return "all-MiniLM-L6-v2"
 
-logger = get_logger("cumrag.retriever")
+logger = get_logger("comprag.retriever")
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +129,7 @@ class Retriever:
     Attributes:
         index_dir: Path to the ChromaDB persistence directory.
         dataset: Dataset name (rgb, nq, halueval).
-        collection_name: ChromaDB collection name (e.g. "cumrag_rgb").
+        collection_name: ChromaDB collection name (e.g. "comprag_rgb").
         embedding_model: Sentence-transformers model name for query embedding.
     """
 
@@ -147,14 +147,14 @@ class Retriever:
             index_dir: Path to the ChromaDB persistence directory.
                        Relative paths resolve from the project root.
             dataset: Dataset name. Must be one of: rgb, nq, halueval.
-                     Used for fallback collection naming as "cumrag_{dataset}"
+                     Used for fallback collection naming as "comprag_{dataset}"
                      when collection_name is not provided.
             embedding_model: Sentence-transformers model for query embedding.
                              If None, reads from collection metadata first,
                              then falls back to eval_config.yaml.
             collection_name: Explicit ChromaDB collection name (e.g. a
                              content-addressed name from resolve_collection_name).
-                             If None, falls back to "cumrag_{dataset}".
+                             If None, falls back to "comprag_{dataset}".
             config: Parsed eval_config.yaml dict. When provided, validate_index()
                     is called after loading the collection to ensure metadata
                     matches config parameters.
@@ -165,7 +165,7 @@ class Retriever:
                         the collection is empty, or index metadata mismatches config.
         """
         self.dataset = dataset
-        self.collection_name = collection_name if collection_name else f"cumrag_{dataset}"
+        self.collection_name = collection_name if collection_name else f"comprag_{dataset}"
 
         # Resolve index directory
         index_path = Path(index_dir)

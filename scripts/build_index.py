@@ -6,7 +6,7 @@ all-MiniLM-L6-v2 (384-dim), and persists to ChromaDB in index/.
 
 Uses content-addressed collection names that encode indexing parameters
 (dataset, embedding model, chunk size, overlap) via SHA256 hash prefix,
-e.g. ``cumrag_rgb_300w_a3f7c2d1``. This prevents stale index reuse when
+e.g. ``comprag_rgb_300w_a3f7c2d1``. This prevents stale index reuse when
 any parameter changes.
 
 The retrieval pipeline is CONSTANT across all eval runs. Same embedding
@@ -46,7 +46,7 @@ _PROJECT_ROOT = _SCRIPT_DIR.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from cumrag.utils import get_logger, load_config, make_collection_name, setup_logging, timer
+from comprag.utils import get_logger, load_config, make_collection_name, setup_logging, timer
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -81,7 +81,7 @@ RGB_SUBSETS = (
     "counterfactual_robustness",
 )
 
-logger = get_logger("cumrag.build_index")
+logger = get_logger("comprag.build_index")
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +441,7 @@ def build_index(
     own content-addressed collection with versioned naming.
 
     Collection names are deterministic based on (dataset, embedding_model,
-    chunk_size, chunk_overlap), e.g. ``cumrag_rgb_300w_a3f7c2d1``.
+    chunk_size, chunk_overlap), e.g. ``comprag_rgb_300w_a3f7c2d1``.
 
     Args:
         dataset_name: One of 'rgb', 'nq', 'halueval'.
@@ -537,7 +537,7 @@ def build_index(
             "dataset": dataset_name,
             "subset": subset or "",
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "cumrag_version": CUMRAG_VERSION,
+            "comprag_version": CUMRAG_VERSION,
         }
 
         collection = client.get_or_create_collection(
@@ -649,7 +649,7 @@ def build_rgb_index(
     embedding_model = _get_embedding_model_name()
 
     # RGB subsets get per-subset collection names:
-    #   dataset key = "rgb_{subset}" -> cumrag_rgb_noise_robustness_300w_{hash}
+    #   dataset key = "rgb_{subset}" -> comprag_rgb_noise_robustness_300w_{hash}
     dataset_key = f"rgb_{subset}"
     collection_name = make_collection_name(
         dataset=dataset_key,
@@ -770,7 +770,7 @@ def build_rgb_index(
             "num_samples": len(samples),
             "num_passages": num_passages,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "cumrag_version": CUMRAG_VERSION,
+            "comprag_version": CUMRAG_VERSION,
         }
 
         collection = client.get_or_create_collection(
@@ -991,7 +991,7 @@ def build_nq_index(
             "index_type": "nq_normalized_test",
             "num_samples": len(samples),
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "cumrag_version": CUMRAG_VERSION,
+            "comprag_version": CUMRAG_VERSION,
         }
 
         collection = client.get_or_create_collection(
@@ -1069,7 +1069,7 @@ def build_halueval_index(
     """Build a ChromaDB index for HaluEval from normalized JSONL.
 
     HaluEval provides a ``knowledge`` field per sample. This function
-    indexes each sample's knowledge text into a single ``cumrag_halueval_*``
+    indexes each sample's knowledge text into a single ``comprag_halueval_*``
     collection, with document IDs that link back to the sample.
 
     Args:
@@ -1197,7 +1197,7 @@ def build_halueval_index(
             "index_type": "halueval_knowledge",
             "num_samples": len(samples),
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "cumrag_version": CUMRAG_VERSION,
+            "comprag_version": CUMRAG_VERSION,
         }
 
         collection = client.get_or_create_collection(

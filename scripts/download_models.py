@@ -37,9 +37,9 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _SCRIPT_DIR.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from cumrag.utils import get_logger, load_config, Timer
+from comprag.utils import get_logger, load_config, Timer
 
-logger = get_logger("cumrag.download_models")
+logger = get_logger("comprag.download_models")
 
 # Default models directory
 MODELS_DIR = _PROJECT_ROOT / "models"

@@ -107,7 +107,7 @@ Not every model-quantization pair runs on every tier. The feasibility matrix in 
 | SmolLM2 1.7B (Q8/FP16) | All | All | All | No | All | All |
 | BitNet 1.58b | No | No | No | 1.58-bit native | No | No |
 
-Entries marked "tight" or "if patient" indicate combinations that are technically feasible but constrained by VRAM headroom (may OOM under load) or inference speed (<5 tok/s on CPU). The runner (`cumrag/runner.py`) logs OOM errors and moves to the next combination rather than crashing the full evaluation matrix.
+Entries marked "tight" or "if patient" indicate combinations that are technically feasible but constrained by VRAM headroom (may OOM under load) or inference speed (<5 tok/s on CPU). The runner (`comprag/runner.py`) logs OOM errors and moves to the next combination rather than crashing the full evaluation matrix.
 
 The hardware tier is expected to affect only performance metrics (tokens/sec, latency), not quality metrics. If hardware tier does affect quality, it would indicate non-determinism in the inference backend, thermal throttling causing numerical drift, or VRAM pressure forcing the model to truncate KV cache.
 
@@ -117,7 +117,7 @@ The following variables are held constant across all evaluation runs to isolate 
 
 ### 3.1 Retrieval Pipeline
 
-Defined in `config/eval_config.yaml` under the `retrieval` block and implemented in `cumrag/retriever.py`:
+Defined in `config/eval_config.yaml` under the `retrieval` block and implemented in `comprag/retriever.py`:
 
 | Parameter | Value | Source |
 |-----------|-------|--------|
@@ -130,24 +130,24 @@ Defined in `config/eval_config.yaml` under the `retrieval` block and implemented
 | Top-k | 5 chunks per query | `retrieval.top_k` |
 | Reranking | None (phase 1) | N/A |
 
-The embedding model is `all-MiniLM-L6-v2` from sentence-transformers, a small (22M parameter), fast model that runs on CPU. It produces 384-dimensional embeddings. The single source of truth for the embedding model name is `eval_config.yaml`; the retriever reads the model name from ChromaDB collection metadata at init, falling back to config if metadata is absent (`cumrag/retriever.py`, `_get_default_embedding_model()`).
+The embedding model is `all-MiniLM-L6-v2` from sentence-transformers, a small (22M parameter), fast model that runs on CPU. It produces 384-dimensional embeddings. The single source of truth for the embedding model name is `eval_config.yaml`; the retriever reads the model name from ChromaDB collection metadata at init, falling back to config if metadata is absent (`comprag/retriever.py`, `_get_default_embedding_model()`).
 
 The chunking strategy uses whitespace word boundaries (not BPE tokens) with 300 words per chunk and 64-word overlap. This corresponds to approximately 400--500 BPE tokens per chunk depending on the tokenizer. The comment in `eval_config.yaml` explicitly documents this: `# Whitespace words, not BPE tokens. 300 words ~ 400-500 BPE tokens.`
 
-Index integrity is enforced at query time: `validate_index()` in `cumrag/retriever.py` raises `ValueError` if the collection's `embedding_model` or `chunk_size_words` metadata differs from `eval_config.yaml`. Collections use content-addressed names (e.g., `cumrag_rgb_noise_robustness_300w_a3f7c2d1`) computed by `make_collection_name()` in `scripts/build_index.py` to prevent stale index reuse. The hash is derived from `sha256("{dataset}|{embedding_model}|{chunk_size}|{chunk_overlap}")[:8]`.
+Index integrity is enforced at query time: `validate_index()` in `comprag/retriever.py` raises `ValueError` if the collection's `embedding_model` or `chunk_size_words` metadata differs from `eval_config.yaml`. Collections use content-addressed names (e.g., `comprag_rgb_noise_robustness_300w_a3f7c2d1`) computed by `make_collection_name()` in `scripts/build_index.py` to prevent stale index reuse. The hash is derived from `sha256("{dataset}|{embedding_model}|{chunk_size}|{chunk_overlap}")[:8]`.
 
 Per-dataset collections isolate different corpus sources:
 
 | Collection Pattern | Dataset | Corpus Source |
 |-------------------|---------|---------------|
-| `cumrag_rgb_noise_robustness_300w_<hash>` | RGB | Per-question passages from RGB dataset |
-| `cumrag_rgb_negative_rejection_300w_<hash>` | RGB | Per-question passages from RGB dataset |
-| `cumrag_rgb_information_integration_300w_<hash>` | RGB | Per-question passages from RGB dataset |
-| `cumrag_rgb_counterfactual_robustness_300w_<hash>` | RGB | Per-question passages from RGB dataset |
-| `cumrag_nq_wiki_300w_<hash>` | NQ | Wikipedia corpus (2018-12-20 dump) |
-| `cumrag_halueval_300w_<hash>` | HaluEval | Per-sample `knowledge` fields |
+| `comprag_rgb_noise_robustness_300w_<hash>` | RGB | Per-question passages from RGB dataset |
+| `comprag_rgb_negative_rejection_300w_<hash>` | RGB | Per-question passages from RGB dataset |
+| `comprag_rgb_information_integration_300w_<hash>` | RGB | Per-question passages from RGB dataset |
+| `comprag_rgb_counterfactual_robustness_300w_<hash>` | RGB | Per-question passages from RGB dataset |
+| `comprag_nq_wiki_300w_<hash>` | NQ | Wikipedia corpus (2018-12-20 dump) |
+| `comprag_halueval_300w_<hash>` | HaluEval | Per-sample `knowledge` fields |
 
-Collection names set to `"auto"` in `eval_config.yaml` are resolved at runtime by `resolve_collection_name()` in `cumrag/retriever.py`.
+Collection names set to `"auto"` in `eval_config.yaml` are resolved at runtime by `resolve_collection_name()` in `comprag/retriever.py`.
 
 ### 3.2 Prompt Template
 
@@ -169,13 +169,13 @@ Do not use any knowledge from your training data.
 <|assistant|>
 ```
 
-The `{retrieved_chunks}` and `{query}` placeholders are filled by the runner (`cumrag/runner.py`, via `format_prompt()` in `cumrag/generator.py`). The llama.cpp server handles chat template conversion per model (ChatML for Qwen, Llama template for Llama 3.1, etc.) -- only the message content is controlled, not the template wrapper. This means the system prompt, context, and user query are identical across models; only the special tokens wrapping them differ.
+The `{retrieved_chunks}` and `{query}` placeholders are filled by the runner (`comprag/runner.py`, via `format_prompt()` in `comprag/generator.py`). The llama.cpp server handles chat template conversion per model (ChatML for Qwen, Llama template for Llama 3.1, etc.) -- only the message content is controlled, not the template wrapper. This means the system prompt, context, and user query are identical across models; only the special tokens wrapping them differ.
 
 The prompt instructs the model to use ONLY the provided context and to explicitly refuse if context is insufficient. This instruction is critical for the negative rejection subset of RGB and for the self_knowledge metric: a model that follows this instruction will score low on self_knowledge (good) and high on negative_rejection_rate (good).
 
 ### 3.3 Generation Parameters
 
-Locked in `config/eval_config.yaml` under the `generation` block. These parameters are enforced in `cumrag/runner.py` via the `_LOCKED_GEN_PARAMS` constant:
+Locked in `config/eval_config.yaml` under the `generation` block. These parameters are enforced in `comprag/runner.py` via the `_LOCKED_GEN_PARAMS` constant:
 
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
@@ -192,7 +192,7 @@ Temperature 0.0 produces greedy (argmax) decoding. Combined with a fixed seed, t
 
 ### 4.1 Quality Metrics
 
-Six quality metrics measure faithfulness, groundedness, and retrieval-awareness. These are the primary dependent variables. Defined in `cumrag/aggregator.py` as `QUALITY_METRICS`:
+Six quality metrics measure faithfulness, groundedness, and retrieval-awareness. These are the primary dependent variables. Defined in `comprag/aggregator.py` as `QUALITY_METRICS`:
 
 ```python
 QUALITY_METRICS = (
@@ -255,7 +255,7 @@ QUALITY_METRICS = (
 
 ### 4.2 Performance Metrics
 
-Four performance metrics characterize inference cost. Defined in `cumrag/aggregator.py` as `PERFORMANCE_METRICS`:
+Four performance metrics characterize inference cost. Defined in `comprag/aggregator.py` as `PERFORMANCE_METRICS`:
 
 ```python
 PERFORMANCE_METRICS = (
@@ -273,7 +273,7 @@ PERFORMANCE_METRICS = (
 | `vram_usage_mb` | MB | Runner `perf` block | Peak VRAM consumption during inference |
 | `gpu_temp` | Celsius | Runner `perf` block | GPU temperature during inference (thermal throttle indicator) |
 
-The aggregator handles aliased field names from the runner's v2 output schema via the `_PERF_ALIASES` dict in `cumrag/aggregator.py`:
+The aggregator handles aliased field names from the runner's v2 output schema via the `_PERF_ALIASES` dict in `comprag/aggregator.py`:
 
 ```python
 _PERF_ALIASES: dict[str, str] = {
@@ -302,7 +302,7 @@ RGB is the primary evaluation dataset with four subsets, each testing a distinct
 | `information_integration` | Can the model synthesize answers from information spread across multiple chunks? | Tests the model's ability to combine evidence from multiple retrieved passages |
 | `counterfactual_robustness` | Does the model resist factually incorrect statements in retrieved context? | Tests whether the model blindly trusts context vs. cross-checking with internal knowledge |
 
-RGB ships its own passages per question. These are indexed into per-subset ChromaDB collections (`cumrag_rgb_noise_robustness_300w_<hash>`, etc.) so that retrieval tests the model's robustness to the provided passages, not retrieval quality. This is a critical design choice: RGB tests retrieval robustness, not retrieval quality. The retriever searches within per-sample passages, not a global corpus.
+RGB ships its own passages per question. These are indexed into per-subset ChromaDB collections (`comprag_rgb_noise_robustness_300w_<hash>`, etc.) so that retrieval tests the model's robustness to the provided passages, not retrieval quality. This is a critical design choice: RGB tests retrieval robustness, not retrieval quality. The retriever searches within per-sample passages, not a global corpus.
 
 Normalization from RGB's native JSON format to CUMRAG's unified JSONL schema is handled by `scripts/normalize_datasets.py`. Each entry maps `question` to `query`, `answer` to `ground_truth`, and preserves `passages` and `label` in the `metadata` field.
 
@@ -310,7 +310,7 @@ Normalization from RGB's native JSON format to CUMRAG's unified JSONL schema is 
 
 **Source:** HuggingFace `nq_open`
 
-NQ provides factoid questions with human-labeled answers derived from Wikipedia. Unlike RGB, NQ does not provide passages -- retrieval runs against a global Wikipedia corpus indexed in `cumrag_nq_wiki_300w_<hash>`. This tests end-to-end RAG accuracy including retrieval quality, making it complementary to RGB's controlled-passage design.
+NQ provides factoid questions with human-labeled answers derived from Wikipedia. Unlike RGB, NQ does not provide passages -- retrieval runs against a global Wikipedia corpus indexed in `comprag_nq_wiki_300w_<hash>`. This tests end-to-end RAG accuracy including retrieval quality, making it complementary to RGB's controlled-passage design.
 
 NQ entries include multiple acceptable answer strings. The normalization script (`scripts/normalize_datasets.py`) uses the first answer as `ground_truth` and preserves all answers in `metadata.all_answers`. The NQ corpus requires the 2018-12-20 Wikipedia dump that NQ was built against.
 
@@ -325,7 +325,7 @@ HaluEval provides question-answer pairs with explicit hallucination labels. Each
 - `answer`: The correct, non-hallucinated answer
 - `hallucinated_answer`: A plausible but incorrect answer containing hallucinations
 
-The `knowledge` field is indexed as the retrievable document in `cumrag_halueval_300w_<hash>`. This dataset directly measures whether the model generates the faithful answer or drifts toward the hallucinated variant, providing binary ground truth for hallucination detection. The normalization script maps `question` to `query`, `answer` to `ground_truth`, and preserves `knowledge` and `hallucinated_answer` in `metadata`.
+The `knowledge` field is indexed as the retrievable document in `comprag_halueval_300w_<hash>`. This dataset directly measures whether the model generates the faithful answer or drifts toward the hallucinated variant, providing binary ground truth for hallucination detection. The normalization script maps `question` to `query`, `answer` to `ground_truth`, and preserves `knowledge` and `hallucinated_answer` in `metadata`.
 
 ### 5.4 Normalization
 
@@ -367,11 +367,11 @@ The following datasets are planned for phase 2 but not included in the initial e
 
 ## 6. Statistical Approach
 
-Statistical methodology is implemented in `cumrag/aggregator.py` and configured in `config/eval_config.yaml` under the `statistics` block.
+Statistical methodology is implemented in `comprag/aggregator.py` and configured in `config/eval_config.yaml` under the `statistics` block.
 
 ### 6.1 Grouping
 
-Results are grouped by the 5-tuple `(model, quantization, hardware_tier, dataset, eval_subset)`, defined as `GROUP_KEYS` in `cumrag/aggregator.py`:
+Results are grouped by the 5-tuple `(model, quantization, hardware_tier, dataset, eval_subset)`, defined as `GROUP_KEYS` in `comprag/aggregator.py`:
 
 ```python
 GROUP_KEYS = ("model", "quantization", "hardware_tier", "dataset", "eval_subset")
@@ -391,7 +391,7 @@ The function probes `run_config` for v2 keys first, then falls back to top-level
 
 ### 6.2 Minimum Runs
 
-Each combination requires a minimum of **3 runs** (`MIN_RUNS = 3` in `cumrag/aggregator.py`, `statistics.min_runs: 3` in config). Groups with fewer runs emit a warning:
+Each combination requires a minimum of **3 runs** (`MIN_RUNS = 3` in `comprag/aggregator.py`, `statistics.min_runs: 3` in config). Groups with fewer runs emit a warning:
 
 ```
 "Only {n} run(s) -- minimum 3 required for reliable CIs"
@@ -401,7 +401,7 @@ The 3-run minimum is a pragmatic floor for bootstrap resampling. With fewer than
 
 ### 6.3 Bootstrap Resampling
 
-Confidence intervals are computed via the `bootstrap_ci()` function in `cumrag/aggregator.py`. Configuration from `config/eval_config.yaml`:
+Confidence intervals are computed via the `bootstrap_ci()` function in `comprag/aggregator.py`. Configuration from `config/eval_config.yaml`:
 
 ```yaml
 statistics:
@@ -456,7 +456,7 @@ For groups with fewer than 2 data points, CI is degenerate (low = high = mean, w
 
 ### 6.4 CI Width Flagging
 
-Any result where CI width exceeds 15% of the absolute mean is flagged for additional runs. From `cumrag/aggregator.py`:
+Any result where CI width exceeds 15% of the absolute mean is flagged for additional runs. From `comprag/aggregator.py`:
 
 ```python
 CI_WIDTH_THRESHOLD = 0.15  # Flag if CI width > 15% of mean
@@ -480,7 +480,7 @@ The 15% threshold is a pragmatic choice: tighter thresholds would require imprac
 
 ### 6.5 Aggregation Output
 
-The `aggregate_group()` function in `cumrag/aggregator.py` computes bootstrap CIs for every metric in `ALL_METRICS = QUALITY_METRICS + PERFORMANCE_METRICS`. The output per group includes:
+The `aggregate_group()` function in `comprag/aggregator.py` computes bootstrap CIs for every metric in `ALL_METRICS = QUALITY_METRICS + PERFORMANCE_METRICS`. The output per group includes:
 
 ```python
 {
@@ -511,7 +511,7 @@ All statistical computation uses `scipy.stats` and `numpy`, as specified in the 
 
 ## 7. Scoring Pipeline
 
-The scoring pipeline is implemented in `cumrag/evaluator.py` and uses a dual-framework, dual-server architecture.
+The scoring pipeline is implemented in `comprag/evaluator.py` and uses a dual-framework, dual-server architecture.
 
 ### 7.1 Frameworks
 
@@ -536,7 +536,7 @@ ragas_metrics:
   - context_recall
 ```
 
-Both frameworks run with graceful degradation: if one fails, the other's results are still returned. Error messages are captured in `ragas_error` and `ragchecker_error` fields of the `EvalResult` dataclass in `cumrag/evaluator.py`.
+Both frameworks run with graceful degradation: if one fails, the other's results are still returned. Error messages are captured in `ragas_error` and `ragchecker_error` fields of the `EvalResult` dataclass in `comprag/evaluator.py`.
 
 ### 7.2 Judge Model
 
@@ -563,7 +563,7 @@ Key design decisions:
 
 ### 7.3 Dual Server Architecture
 
-The generation server (port 8080) and judge server (port 8081) cannot run simultaneously on the V100 due to VRAM constraints -- both are GPU-accelerated models that require significant VRAM. The scoring pipeline in `cumrag/evaluator.py` enforces a strictly sequential workflow:
+The generation server (port 8080) and judge server (port 8081) cannot run simultaneously on the V100 due to VRAM constraints -- both are GPU-accelerated models that require significant VRAM. The scoring pipeline in `comprag/evaluator.py` enforces a strictly sequential workflow:
 
 1. **Stop the generation server** on port 8080 (`stop_generation_server()`)
 2. **Start the judge server** on port 8081 with the judge GGUF (`start_judge_server()`)
@@ -585,7 +585,7 @@ The generation server (port 8080) and judge server (port 8081) cannot run simult
 
 ### 7.4 RAGChecker Input Format Bridge
 
-The runner's raw JSONL output must be converted to RAGChecker's expected format. The `to_ragchecker_format()` function in `cumrag/evaluator.py` performs this mapping:
+The runner's raw JSONL output must be converted to RAGChecker's expected format. The `to_ragchecker_format()` function in `comprag/evaluator.py` performs this mapping:
 
 ```python
 def to_ragchecker_format(raw_results: list[dict]) -> dict:
@@ -608,7 +608,7 @@ def to_ragchecker_format(raw_results: list[dict]) -> dict:
 
 ### 7.5 Self-Judge Quantization Swap
 
-When the model being evaluated is Qwen 2.5 14B Instruct Q4_K_M (i.e., the same model and quantization as the judge), using the identical weights for both generation and scoring creates a circular evaluation. The `_resolve_judge_gguf()` function in `cumrag/evaluator.py` detects this by comparing the eval model filename against the judge model name. When a match is detected, the judge quant is swapped to `Q8_0` (`judge.self_judge_quant` in config):
+When the model being evaluated is Qwen 2.5 14B Instruct Q4_K_M (i.e., the same model and quantization as the judge), using the identical weights for both generation and scoring creates a circular evaluation. The `_resolve_judge_gguf()` function in `comprag/evaluator.py` detects this by comparing the eval model filename against the judge model name. When a match is detected, the judge quant is swapped to `Q8_0` (`judge.self_judge_quant` in config):
 
 ```python
 if judge_stem in eval_stem:
@@ -621,7 +621,7 @@ This ensures the judge always uses different weights than the model being scored
 
 ### 7.6 Raw Output Schema
 
-The runner's raw JSONL output (one line per query) follows the v2 schema defined in `cumrag/runner.py`. Each record includes:
+The runner's raw JSONL output (one line per query) follows the v2 schema defined in `comprag/runner.py`. Each record includes:
 
 ```json
 {
@@ -690,7 +690,7 @@ Mitigation: HaluEval provides the ground-truth knowledge field as the retrievabl
 
 Extended evaluation runs on consumer hardware (1660 Super, E5-2667v4) may trigger thermal throttling, reducing clock speeds mid-run. This affects performance metrics (tokens/sec, latency) and could introduce variance in quality metrics if throttling causes numerical differences in inference.
 
-Mitigation: GPU temperature is logged as `gpu_temp` in the performance metrics (`cumrag/aggregator.py`, `PERFORMANCE_METRICS`) to detect throttling post-hoc. Runs where `gpu_temp` exceeds the GPU's known throttle threshold (e.g., 83C for the 1660 Super) should be flagged during analysis. The V100 (primary eval tier) has datacenter-grade cooling and is unlikely to throttle.
+Mitigation: GPU temperature is logged as `gpu_temp` in the performance metrics (`comprag/aggregator.py`, `PERFORMANCE_METRICS`) to detect throttling post-hoc. Runs where `gpu_temp` exceeds the GPU's known throttle threshold (e.g., 83C for the 1660 Super) should be flagged during analysis. The V100 (primary eval tier) has datacenter-grade cooling and is unlikely to throttle.
 
 ### 8.6 Quantization as Confound
 
@@ -725,12 +725,12 @@ All configuration files are in the `config/` directory of the project root.
 
 | Module | Purpose | Key Functions/Classes |
 |--------|---------|----------------------|
-| `cumrag/runner.py` | Main eval loop | `EvalRunner`, `run_eval()`, signal handlers, context window safety check |
-| `cumrag/evaluator.py` | Scoring pipeline | `RAGASEvaluator`, `RAGCheckerEvaluator`, `CombinedEvaluator`, `to_ragchecker_format()` |
-| `cumrag/aggregator.py` | Statistical aggregation | `bootstrap_ci()`, `aggregate_all()`, `run_aggregation()`, CSV/JSONL/Markdown output |
-| `cumrag/retriever.py` | ChromaDB interface | `Retriever`, `validate_index()`, `resolve_collection_name()`, `make_collection_name()` |
-| `cumrag/generator.py` | llama.cpp server interface | `LlamaServer`, `format_prompt()`, `load_prompt_template()`, zombie process cleanup |
-| `cumrag/utils.py` | Shared utilities | `get_hardware_meta()`, `Timer`, `read_jsonl()`, `append_jsonl()`, `load_config()` |
+| `comprag/runner.py` | Main eval loop | `EvalRunner`, `run_eval()`, signal handlers, context window safety check |
+| `comprag/evaluator.py` | Scoring pipeline | `RAGASEvaluator`, `RAGCheckerEvaluator`, `CombinedEvaluator`, `to_ragchecker_format()` |
+| `comprag/aggregator.py` | Statistical aggregation | `bootstrap_ci()`, `aggregate_all()`, `run_aggregation()`, CSV/JSONL/Markdown output |
+| `comprag/retriever.py` | ChromaDB interface | `Retriever`, `validate_index()`, `resolve_collection_name()`, `make_collection_name()` |
+| `comprag/generator.py` | llama.cpp server interface | `LlamaServer`, `format_prompt()`, `load_prompt_template()`, zombie process cleanup |
+| `comprag/utils.py` | Shared utilities | `get_hardware_meta()`, `Timer`, `read_jsonl()`, `append_jsonl()`, `load_config()` |
 | `scripts/build_index.py` | Index builder | Chunk documents, embed with sentence-transformers, persist to ChromaDB |
 | `scripts/normalize_datasets.py` | Dataset normalization | Per-dataset transforms to unified JSONL schema |
 | `scripts/download_datasets.py` | Dataset downloader | Fetch RGB, NQ, HaluEval from sources |
@@ -745,8 +745,8 @@ To reproduce the results reported in this study:
 3. **Datasets:** Run `scripts/download_datasets.py` followed by `scripts/normalize_datasets.py`
 4. **Models:** Download GGUF files per `config/models.yaml` via `scripts/download_models.py`
 5. **Index:** Build vector index via `scripts/build_index.py --all`
-6. **Evaluation:** Run the eval matrix via `cumrag/runner.py` (see CLI arguments)
-7. **Scoring:** Run the scoring pipeline via `cumrag/evaluator.py`
-8. **Aggregation:** Compute CIs via `cumrag/aggregator.py --input results/raw/ --output results/aggregated/`
+6. **Evaluation:** Run the eval matrix via `comprag/runner.py` (see CLI arguments)
+7. **Scoring:** Run the scoring pipeline via `comprag/evaluator.py`
+8. **Aggregation:** Compute CIs via `comprag/aggregator.py --input results/raw/ --output results/aggregated/`
 
 All random seeds are fixed at 42. The locked generation parameters (temp=0.0, top_p=1.0, max_tokens=512, seed=42) are enforced by the runner. The bootstrap CI computation uses a fixed RNG seed. Given identical hardware and software versions, results should be reproducible within the CI bounds documented in the aggregated output.

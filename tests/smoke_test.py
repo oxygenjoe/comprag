@@ -97,8 +97,8 @@ def _run_check_or_skip(
 
 
 def check_import_utils() -> Optional[str]:
-    """Verify cumrag.utils imports cleanly with expected symbols."""
-    from cumrag import utils
+    """Verify comprag.utils imports cleanly with expected symbols."""
+    from comprag import utils
 
     required = [
         "append_jsonl", "read_jsonl", "Timer", "timer",
@@ -108,21 +108,21 @@ def check_import_utils() -> Optional[str]:
     ]
     missing = [s for s in required if not hasattr(utils, s)]
     if missing:
-        return f"Missing symbols in cumrag.utils: {missing}"
+        return f"Missing symbols in comprag.utils: {missing}"
     return None
 
 
 def check_import_retriever() -> Optional[str]:
-    """Verify cumrag.retriever imports cleanly."""
-    from cumrag.retriever import Retriever
+    """Verify comprag.retriever imports cleanly."""
+    from comprag.retriever import Retriever
     if not inspect.isclass(Retriever):
         return "Retriever is not a class"
     return None
 
 
 def check_import_generator() -> Optional[str]:
-    """Verify cumrag.generator imports cleanly."""
-    from cumrag.generator import LlamaServer, format_prompt, load_prompt_template
+    """Verify comprag.generator imports cleanly."""
+    from comprag.generator import LlamaServer, format_prompt, load_prompt_template
     if not inspect.isclass(LlamaServer):
         return "LlamaServer is not a class"
     if not callable(format_prompt):
@@ -133,8 +133,8 @@ def check_import_generator() -> Optional[str]:
 
 
 def check_import_evaluator() -> Optional[str]:
-    """Verify cumrag.evaluator imports cleanly."""
-    from cumrag.evaluator import (
+    """Verify comprag.evaluator imports cleanly."""
+    from comprag.evaluator import (
         RAGASEvaluator,
         RAGCheckerEvaluator,
         CombinedEvaluator,
@@ -148,22 +148,22 @@ def check_import_evaluator() -> Optional[str]:
 
 
 def check_import_runner() -> Optional[str]:
-    """Verify cumrag.runner imports cleanly."""
-    from cumrag.runner import EvalRunner
+    """Verify comprag.runner imports cleanly."""
+    from comprag.runner import EvalRunner
     if not inspect.isclass(EvalRunner):
         return "EvalRunner is not a class"
     return None
 
 
 def check_import_aggregator() -> Optional[str]:
-    """Verify cumrag.aggregator imports cleanly."""
-    from cumrag import aggregator
+    """Verify comprag.aggregator imports cleanly."""
+    from comprag import aggregator
     required = [
         "load_results", "group_results", "bootstrap_ci", "run_aggregation",
     ]
     missing = [s for s in required if not hasattr(aggregator, s)]
     if missing:
-        return f"Missing symbols in cumrag.aggregator: {missing}"
+        return f"Missing symbols in comprag.aggregator: {missing}"
     return None
 
 
@@ -174,7 +174,7 @@ def check_import_aggregator() -> Optional[str]:
 
 def check_retriever_interface() -> Optional[str]:
     """Verify Retriever class has expected methods with correct signatures."""
-    from cumrag.retriever import Retriever
+    from comprag.retriever import Retriever
 
     required_methods = {
         "retrieve": ["self", "query"],
@@ -200,7 +200,7 @@ def check_retriever_interface() -> Optional[str]:
 
 def check_generator_interface() -> Optional[str]:
     """Verify LlamaServer class has expected methods."""
-    from cumrag.generator import LlamaServer
+    from comprag.generator import LlamaServer
 
     required_methods = [
         "start", "stop", "wait_ready", "generate", "generate_with_metrics",
@@ -219,7 +219,7 @@ def check_generator_interface() -> Optional[str]:
 
 def check_evaluator_interface() -> Optional[str]:
     """Verify evaluator classes have evaluate() methods."""
-    from cumrag.evaluator import RAGASEvaluator, RAGCheckerEvaluator, CombinedEvaluator
+    from comprag.evaluator import RAGASEvaluator, RAGCheckerEvaluator, CombinedEvaluator
 
     errors = []
     for cls_name, cls in [
@@ -244,7 +244,7 @@ def check_evaluator_interface() -> Optional[str]:
 
 def check_runner_interface() -> Optional[str]:
     """Verify EvalRunner class has expected methods."""
-    from cumrag.runner import EvalRunner
+    from comprag.runner import EvalRunner
 
     required_methods = ["run_single", "run_dataset", "run_matrix"]
     missing = [m for m in required_methods if not hasattr(EvalRunner, m)]
@@ -255,7 +255,7 @@ def check_runner_interface() -> Optional[str]:
 
 def check_aggregator_interface() -> Optional[str]:
     """Verify aggregator functions have correct signatures."""
-    from cumrag.aggregator import load_results, group_results, bootstrap_ci, run_aggregation
+    from comprag.aggregator import load_results, group_results, bootstrap_ci, run_aggregation
 
     # bootstrap_ci should accept a numpy array
     sig = inspect.signature(bootstrap_ci)
@@ -279,7 +279,7 @@ def check_aggregator_interface() -> Optional[str]:
 
 def check_config_eval() -> Optional[str]:
     """Load eval_config.yaml and verify expected keys."""
-    from cumrag.utils import load_config
+    from comprag.utils import load_config
 
     config = load_config("eval_config")
     required_sections = ["datasets", "retrieval", "generation", "evaluation", "statistics", "output"]
@@ -301,7 +301,7 @@ def check_config_eval() -> Optional[str]:
 
 def check_config_models() -> Optional[str]:
     """Load models.yaml and verify structure."""
-    from cumrag.utils import load_config
+    from comprag.utils import load_config
 
     config = load_config("models")
     models = config.get("models")
@@ -324,7 +324,7 @@ def check_config_models() -> Optional[str]:
 
 def check_config_hardware() -> Optional[str]:
     """Load hardware.yaml and verify structure."""
-    from cumrag.utils import load_config
+    from comprag.utils import load_config
 
     config = load_config("hardware")
     tiers = config.get("hardware_tiers")
@@ -346,7 +346,7 @@ def check_config_hardware() -> Optional[str]:
 
 def check_prompt_template() -> Optional[str]:
     """Load prompt template and verify placeholders."""
-    from cumrag.generator import load_prompt_template
+    from comprag.generator import load_prompt_template
 
     template = load_prompt_template()
     if "{retrieved_chunks}" not in template:
@@ -374,7 +374,7 @@ def check_prompt_template() -> Optional[str]:
 
 def check_jsonl_roundtrip() -> Optional[str]:
     """Write a sample record, read it back, verify structure matches spec."""
-    from cumrag.utils import append_jsonl, read_jsonl
+    from comprag.utils import append_jsonl, read_jsonl
 
     # Build a spec-compliant sample record
     sample_record = {
@@ -467,7 +467,7 @@ def check_jsonl_roundtrip() -> Optional[str]:
 
 def check_hardware_detection() -> Optional[str]:
     """Run get_hardware_meta() and verify it returns valid dict."""
-    from cumrag.utils import get_hardware_meta
+    from comprag.utils import get_hardware_meta
 
     meta = get_hardware_meta()
     if not isinstance(meta, dict):
@@ -491,7 +491,7 @@ def check_hardware_detection() -> Optional[str]:
 
 def check_hardware_full() -> Optional[str]:
     """Run get_hardware_full() and verify extended info."""
-    from cumrag.utils import get_hardware_full
+    from comprag.utils import get_hardware_full
 
     info = get_hardware_full()
     if not isinstance(info, dict):
@@ -515,7 +515,7 @@ def check_hardware_full() -> Optional[str]:
 
 def check_timer() -> Optional[str]:
     """Verify Timer context manager works correctly."""
-    from cumrag.utils import Timer
+    from comprag.utils import Timer
     import time
 
     with Timer() as t:
@@ -539,7 +539,7 @@ def check_timer() -> Optional[str]:
 
 def check_format_prompt() -> Optional[str]:
     """Verify prompt formatting works end-to-end."""
-    from cumrag.generator import load_prompt_template, format_prompt
+    from comprag.generator import load_prompt_template, format_prompt
 
     template = load_prompt_template()
     chunks = [
@@ -613,50 +613,50 @@ def check_script_profile_hardware() -> Optional[str]:
 
 
 def check_module_retriever_help() -> Optional[str]:
-    """Verify python -m cumrag.retriever --help works."""
+    """Verify python -m comprag.retriever --help works."""
     import subprocess
 
     result = subprocess.run(
-        [sys.executable, "-m", "cumrag.retriever", "--help"],
+        [sys.executable, "-m", "comprag.retriever", "--help"],
         capture_output=True,
         text=True,
         timeout=30,
         cwd=str(_PROJECT_ROOT),
     )
     if result.returncode != 0:
-        return f"cumrag.retriever --help exited {result.returncode}: {result.stderr[:300]}"
+        return f"comprag.retriever --help exited {result.returncode}: {result.stderr[:300]}"
     return None
 
 
 def check_module_aggregator_help() -> Optional[str]:
-    """Verify python -m cumrag.aggregator --help works."""
+    """Verify python -m comprag.aggregator --help works."""
     import subprocess
 
     result = subprocess.run(
-        [sys.executable, "-m", "cumrag.aggregator", "--help"],
+        [sys.executable, "-m", "comprag.aggregator", "--help"],
         capture_output=True,
         text=True,
         timeout=30,
         cwd=str(_PROJECT_ROOT),
     )
     if result.returncode != 0:
-        return f"cumrag.aggregator --help exited {result.returncode}: {result.stderr[:300]}"
+        return f"comprag.aggregator --help exited {result.returncode}: {result.stderr[:300]}"
     return None
 
 
 def check_module_utils_help() -> Optional[str]:
-    """Verify python -m cumrag.utils --help works."""
+    """Verify python -m comprag.utils --help works."""
     import subprocess
 
     result = subprocess.run(
-        [sys.executable, "-m", "cumrag.utils", "--help"],
+        [sys.executable, "-m", "comprag.utils", "--help"],
         capture_output=True,
         text=True,
         timeout=30,
         cwd=str(_PROJECT_ROOT),
     )
     if result.returncode != 0:
-        return f"cumrag.utils --help exited {result.returncode}: {result.stderr[:300]}"
+        return f"comprag.utils --help exited {result.returncode}: {result.stderr[:300]}"
     return None
 
 
@@ -668,7 +668,7 @@ def check_module_utils_help() -> Optional[str]:
 def check_bootstrap_ci() -> Optional[str]:
     """Verify bootstrap_ci produces sane output on known data."""
     import numpy as np
-    from cumrag.aggregator import bootstrap_ci
+    from comprag.aggregator import bootstrap_ci
 
     values = np.array([0.8, 0.82, 0.79, 0.81, 0.83, 0.80, 0.78, 0.84])
     result = bootstrap_ci(values)
@@ -701,7 +701,7 @@ def check_bootstrap_ci() -> Optional[str]:
 
 def check_eval_dataclasses() -> Optional[str]:
     """Verify EvalSample/EvalResult instantiation and serialization."""
-    from cumrag.evaluator import EvalSample, EvalResult
+    from comprag.evaluator import EvalSample, EvalResult
 
     sample = EvalSample(
         question="What is 2+2?",
@@ -747,7 +747,7 @@ def check_eval_dataclasses() -> Optional[str]:
 def check_set_seed() -> Optional[str]:
     """Verify set_seed produces deterministic random output."""
     import random
-    from cumrag.utils import set_seed
+    from comprag.utils import set_seed
 
     set_seed(42)
     val1 = random.random()
@@ -860,7 +860,7 @@ def check_p2_normalize_transforms() -> Optional[str]:
 
 def check_p2_make_collection_name() -> Optional[str]:
     """Verify make_collection_name is importable and deterministic."""
-    from cumrag.utils import make_collection_name
+    from comprag.utils import make_collection_name
 
     if not callable(make_collection_name):
         return "make_collection_name is not callable"
@@ -880,9 +880,9 @@ def check_p2_make_collection_name() -> Optional[str]:
     if name1 == name4:
         return f"make_collection_name same for different chunk_size: '{name1}' == '{name4}'"
 
-    # Format check: should start with "cumrag_"
-    if not name1.startswith("cumrag_"):
-        return f"make_collection_name should start with 'cumrag_', got '{name1}'"
+    # Format check: should start with "comprag_"
+    if not name1.startswith("comprag_"):
+        return f"make_collection_name should start with 'comprag_', got '{name1}'"
 
     # Should be a non-empty string
     if not name1 or not isinstance(name1, str):
@@ -898,7 +898,7 @@ def check_p2_make_collection_name() -> Optional[str]:
 
 def check_p2_validate_index() -> Optional[str]:
     """Verify validate_index importable and raises ValueError on mismatch."""
-    from cumrag.retriever import validate_index
+    from comprag.retriever import validate_index
 
     if not callable(validate_index):
         return "validate_index is not callable"
@@ -952,7 +952,7 @@ def check_p2_validate_index() -> Optional[str]:
 
 def check_p2_resolve_collection_name() -> Optional[str]:
     """Verify resolve_collection_name resolves 'auto' correctly."""
-    from cumrag.retriever import resolve_collection_name
+    from comprag.retriever import resolve_collection_name
 
     if not callable(resolve_collection_name):
         return "resolve_collection_name is not callable"
@@ -973,8 +973,8 @@ def check_p2_resolve_collection_name() -> Optional[str]:
     auto_name = resolve_collection_name("rgb_noise_robustness", config)
     if not auto_name or not isinstance(auto_name, str):
         return f"resolve_collection_name returned invalid for 'auto': {auto_name!r}"
-    if not auto_name.startswith("cumrag_"):
-        return f"Auto-resolved name should start with 'cumrag_', got '{auto_name}'"
+    if not auto_name.startswith("comprag_"):
+        return f"Auto-resolved name should start with 'comprag_', got '{auto_name}'"
 
     # Same call should be deterministic
     auto_name2 = resolve_collection_name("rgb_noise_robustness", config)
@@ -1003,7 +1003,7 @@ def check_p2_resolve_collection_name() -> Optional[str]:
 
 def check_p2_to_ragchecker_format() -> Optional[str]:
     """Verify to_ragchecker_format produces correct RAGChecker schema."""
-    from cumrag.evaluator import to_ragchecker_format
+    from comprag.evaluator import to_ragchecker_format
 
     if not callable(to_ragchecker_format):
         return "to_ragchecker_format is not callable"
@@ -1072,7 +1072,7 @@ def check_p2_to_ragchecker_format() -> Optional[str]:
 
 def check_p2_config_judge() -> Optional[str]:
     """Verify eval_config.yaml has the judge block with required fields."""
-    from cumrag.utils import load_config
+    from comprag.utils import load_config
 
     config = load_config("eval_config")
     judge = config.get("judge")
@@ -1095,7 +1095,7 @@ def check_p2_config_judge() -> Optional[str]:
 
 def check_p2_config_collections() -> Optional[str]:
     """Verify eval_config.yaml has retrieval.collections mapping."""
-    from cumrag.utils import load_config
+    from comprag.utils import load_config
 
     config = load_config("eval_config")
     retrieval = config.get("retrieval", {})
@@ -1125,7 +1125,7 @@ def check_p2_config_collections() -> Optional[str]:
 
 def check_p2_runner_v2_schema() -> Optional[str]:
     """Verify runner v2 output structure includes run_config, perf, retrieved_chunks."""
-    from cumrag.runner import EvalRunner
+    from comprag.runner import EvalRunner
 
     # Validate that EvalRunner.run_single exists and accepts the right params
     if not hasattr(EvalRunner, "run_single"):
@@ -1205,7 +1205,7 @@ def check_p2_runner_v2_schema() -> Optional[str]:
 
 def check_p2_aggregator_v2_parse() -> Optional[str]:
     """Verify aggregator can parse v2 format records (run_config, perf, metrics)."""
-    from cumrag.aggregator import group_results, bootstrap_ci, _extract_metric
+    from comprag.aggregator import group_results, bootstrap_ci, _extract_metric
 
     # Build synthetic v2 records
     v2_records = [
@@ -1384,16 +1384,16 @@ def check_p3_normalized_halueval_exists() -> Optional[str]:
 
 # Expected collections with minimum entry counts
 _EXPECTED_COLLECTIONS = [
-    ("cumrag_rgb_noise_robustness_300w_42df71c0", 100),
-    ("cumrag_rgb_negative_rejection_300w_bf24e598", 100),
-    ("cumrag_rgb_information_integration_300w_f6e734b7", 100),
-    ("cumrag_rgb_counterfactual_robustness_300w_6c5b9d8e", 100),
-    ("cumrag_nq_wiki_300w_1c500ba6", 100),
-    ("cumrag_halueval_300w_c255219b", 100),
+    ("comprag_rgb_noise_robustness_300w_42df71c0", 100),
+    ("comprag_rgb_negative_rejection_300w_bf24e598", 100),
+    ("comprag_rgb_information_integration_300w_f6e734b7", 100),
+    ("comprag_rgb_counterfactual_robustness_300w_6c5b9d8e", 100),
+    ("comprag_nq_wiki_300w_1c500ba6", 100),
+    ("comprag_halueval_300w_c255219b", 100),
 ]
 
 _REQUIRED_COLLECTION_METADATA = [
-    "embedding_model", "chunk_size_words", "dataset", "cumrag_version",
+    "embedding_model", "chunk_size_words", "dataset", "comprag_version",
 ]
 
 
@@ -1461,7 +1461,7 @@ def check_p3_retriever_real_query() -> Optional[str]:
         return None  # Handled as SKIP by caller
 
     # Use the noise_robustness collection (largest RGB subset)
-    coll_name = "cumrag_rgb_noise_robustness_300w_42df71c0"
+    coll_name = "comprag_rgb_noise_robustness_300w_42df71c0"
     try:
         import chromadb
         client = chromadb.PersistentClient(path=str(index_dir))
@@ -1472,7 +1472,7 @@ def check_p3_retriever_real_query() -> Optional[str]:
         return f"ChromaDB check failed: {e}"
 
     try:
-        from cumrag.retriever import Retriever
+        from comprag.retriever import Retriever
         r = Retriever(
             index_dir=str(index_dir),
             dataset="rgb",
@@ -1785,7 +1785,7 @@ def check_p5_run_matrix_combo_count() -> Optional[str]:
 
 def check_p5_runner_functions_importable() -> Optional[str]:
     """Verify apply_vram_limit, clear_vram_limit, check_headless, load_run_matrix are importable."""
-    from cumrag.runner import apply_vram_limit, clear_vram_limit, check_headless, load_run_matrix
+    from comprag.runner import apply_vram_limit, clear_vram_limit, check_headless, load_run_matrix
 
     for name, fn in [
         ("apply_vram_limit", apply_vram_limit),
@@ -1806,7 +1806,7 @@ def check_p5_runner_functions_importable() -> Optional[str]:
 
 def check_p5_generator_timeout_param() -> Optional[str]:
     """Verify LlamaServer.generate() and generate_with_metrics() accept timeout."""
-    from cumrag.generator import LlamaServer
+    from comprag.generator import LlamaServer
 
     for method_name in ("generate", "generate_with_metrics"):
         method = getattr(LlamaServer, method_name, None)
@@ -1826,7 +1826,7 @@ def check_p5_generator_timeout_param() -> Optional[str]:
 
 def check_p5_matrix_cli_flag() -> Optional[str]:
     """Verify --matrix flag is accepted by parse_args (with --hardware-tier)."""
-    from cumrag.runner import parse_args
+    from comprag.runner import parse_args
 
     # Parse a synthetic --matrix invocation (should not error)
     try:
@@ -1867,8 +1867,8 @@ def run_live_test(model_path: str, dataset: str) -> bool:
     print("LIVE PIPELINE TEST")
     print("=" * 60)
 
-    from cumrag.generator import LlamaServer, load_prompt_template, format_prompt
-    from cumrag.utils import Timer, get_hardware_meta
+    from comprag.generator import LlamaServer, load_prompt_template, format_prompt
+    from comprag.utils import Timer, get_hardware_meta
 
     model_file = Path(model_path)
     if not model_file.exists():
@@ -1883,7 +1883,7 @@ def run_live_test(model_path: str, dataset: str) -> bool:
         return False
 
     try:
-        from cumrag.retriever import Retriever
+        from comprag.retriever import Retriever
         retriever = Retriever(index_dir=str(index_dir), dataset=dataset)
         info = retriever.get_collection_info()
         _record("live.retriever_init", _PASS, f"{info['count']} chunks in {info['collection_name']}")

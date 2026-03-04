@@ -404,7 +404,7 @@ class TestPipelineSummaryReport:
             "scripts.build_index": MagicMock(),
             "scripts.validate_index": MagicMock(),
             "scripts.visualize_results": MagicMock(),
-            "cumrag.aggregator": MagicMock(),
+            "comprag.aggregator": MagicMock(),
         }):
             result = run_pipeline(dry_run=True, force=True)
 

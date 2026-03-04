@@ -8,7 +8,7 @@ Supports both v1 (flat top-level fields) and v2 (nested run_config/perf/metrics)
 raw JSONL input schemas.  Output defaults to the v2 aggregated schema.
 
 Importable as module; also runnable as CLI via:
-    python -m cumrag.aggregator --input results/raw/ --output results/aggregated/
+    python -m comprag.aggregator --input results/raw/ --output results/aggregated/
 
 Flags any result where CI width > 15% of the mean for additional runs.
 Warns if fewer than 3 runs exist for any combination.
@@ -26,15 +26,15 @@ from typing import Optional, Union
 import numpy as np
 from scipy import stats as scipy_stats
 
-from cumrag.utils import get_hardware_meta, get_logger, read_jsonl
+from comprag.utils import get_hardware_meta, get_logger, read_jsonl
 
-log = get_logger("cumrag.aggregator")
+log = get_logger("comprag.aggregator")
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-GROUP_KEYS = ("model", "quantization", "hardware_tier", "dataset", "eval_subset")
+GROUP_KEYS = ("model", "quantization", "hardware_tier", "dataset", "eval_subset", "pass")
 
 QUALITY_METRICS = (
     "faithfulness",
@@ -165,7 +165,13 @@ def _extract_group_key(record: dict) -> tuple:
             values.append(str(val) if val else "unknown")
             continue
 
-        # 3. Top-level fallback (v1 format)
+        # 3. "pass" field: check run_config.pass, then top-level, default to pass2_loose
+        if gk == "pass":
+            val = run_config.get("pass", record.get("pass", "pass2_loose"))
+            values.append(str(val) if val else "pass2_loose")
+            continue
+
+        # 4. Top-level fallback (v1 format)
         val = record.get(gk, "unknown")
         values.append(str(val) if val else "unknown")
 

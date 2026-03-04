@@ -3,7 +3,7 @@
 Provides JSONL I/O, timing utilities, hardware metadata collection,
 resource monitoring, YAML config loading, reproducibility seed setter,
 content-addressed collection naming, and logging setup. Importable as
-module; also runnable as CLI via `python -m cumrag.utils` to print
+module; also runnable as CLI via `python -m comprag.utils` to print
 hardware info.
 """
 
@@ -34,14 +34,14 @@ _log_initialized = False
 def setup_logging(
     level: int = logging.INFO,
     log_file: Optional[Union[str, Path]] = None,
-    name: str = "cumrag",
+    name: str = "comprag",
 ) -> logging.Logger:
     """Configure project-wide logging.
 
     Args:
         level: Logging level (default INFO).
         log_file: Optional file path to also write logs to.
-        name: Logger name (default 'cumrag').
+        name: Logger name (default 'comprag').
 
     Returns:
         Configured logger instance.
@@ -75,8 +75,8 @@ def setup_logging(
     return logger
 
 
-def get_logger(name: str = "cumrag") -> logging.Logger:
-    """Get a child logger under the cumrag namespace.
+def get_logger(name: str = "comprag") -> logging.Logger:
+    """Get a child logger under the comprag namespace.
 
     If setup_logging() hasn't been called yet, initializes with defaults.
     """
@@ -202,7 +202,7 @@ def timer(label: Optional[str] = None, logger: Optional[logging.Logger] = None):
         t.elapsed = t.end - t.start
         t.elapsed_ms = t.elapsed * 1000.0
         if label is not None:
-            log = logger or get_logger("cumrag.timer")
+            log = logger or get_logger("comprag.timer")
             log.info("%s: %.3fs (%.1fms)", label, t.elapsed, t.elapsed_ms)
 
 
@@ -264,15 +264,15 @@ def make_collection_name(
         chunk_overlap: Chunk overlap in whitespace words.
 
     Returns:
-        Collection name in the format ``cumrag_{dataset}_{chunk_size}w_{hash[:8]}``.
+        Collection name in the format ``comprag_{dataset}_{chunk_size}w_{hash[:8]}``.
 
     Examples:
         >>> make_collection_name("rgb_noise_robustness", "all-MiniLM-L6-v2", 300, 64)
-        'cumrag_rgb_noise_robustness_300w_...'
+        'comprag_rgb_noise_robustness_300w_...'
     """
     params = f"{dataset}|{embedding_model}|{chunk_size}|{chunk_overlap}"
     param_hash = hashlib.sha256(params.encode()).hexdigest()[:8]
-    return f"cumrag_{dataset}_{chunk_size}w_{param_hash}"
+    return f"comprag_{dataset}_{chunk_size}w_{param_hash}"
 
 
 # ---------------------------------------------------------------------------
@@ -564,7 +564,7 @@ def get_resource_snapshot() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# CLI mode — `python -m cumrag.utils`
+# CLI mode — `python -m comprag.utils`
 # ---------------------------------------------------------------------------
 
 

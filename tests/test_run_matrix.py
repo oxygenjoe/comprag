@@ -31,7 +31,7 @@ _PROJECT_ROOT = _SCRIPT_DIR.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from cumrag.runner import (
+from comprag.runner import (
     EvalRunner,
     _classify_error,
     _resolve_model_path,
@@ -342,7 +342,7 @@ class TestVramLimit:
 class TestBuildHardwareMeta:
     """_build_hardware_meta() produces correct fields for simulated vs non-simulated tiers."""
 
-    @patch("cumrag.runner.get_hardware_meta")
+    @patch("comprag.runner.get_hardware_meta")
     def _make_runner(self, mock_hw):
         """Create an EvalRunner with mocked hardware and config."""
         mock_hw.return_value = {
@@ -351,7 +351,7 @@ class TestBuildHardwareMeta:
             "framework": "CUDA 12.2",
             "os": "Linux",
         }
-        with patch("cumrag.runner.load_config") as mock_config:
+        with patch("comprag.runner.load_config") as mock_config:
             mock_config.return_value = {}
             runner = EvalRunner()
         return runner
@@ -468,7 +468,7 @@ class TestCheckHeadless:
         env.update(overrides)
         return env
 
-    @patch("cumrag.runner.logger")
+    @patch("comprag.runner.logger")
     def test_warns_when_display_set(self, mock_logger):
         """check_headless warns when DISPLAY is set."""
         env = self._clean_env(DISPLAY=":0")
@@ -478,7 +478,7 @@ class TestCheckHeadless:
         call_args = mock_logger.warning.call_args
         assert "Display server detected" in call_args[0][0]
 
-    @patch("cumrag.runner.logger")
+    @patch("comprag.runner.logger")
     def test_warns_when_wayland_set(self, mock_logger):
         """check_headless warns when WAYLAND_DISPLAY is set."""
         env = self._clean_env(WAYLAND_DISPLAY="wayland-0")
@@ -488,7 +488,7 @@ class TestCheckHeadless:
         call_args = mock_logger.warning.call_args
         assert "Display server detected" in call_args[0][0]
 
-    @patch("cumrag.runner.logger")
+    @patch("comprag.runner.logger")
     def test_warns_when_both_set(self, mock_logger):
         """check_headless warns when both DISPLAY and WAYLAND_DISPLAY are set."""
         env = self._clean_env(DISPLAY=":0", WAYLAND_DISPLAY="wayland-0")
@@ -498,7 +498,7 @@ class TestCheckHeadless:
         call_args = mock_logger.warning.call_args
         assert "Display server detected" in call_args[0][0]
 
-    @patch("cumrag.runner.logger")
+    @patch("comprag.runner.logger")
     def test_silent_when_no_display(self, mock_logger):
         """check_headless is silent when neither DISPLAY nor WAYLAND_DISPLAY set."""
         env = self._clean_env()
@@ -754,11 +754,11 @@ class TestResolveModelPath:
 class TestTimeoutConfig:
     """set_timeout_config() correctly updates EvalRunner instance variables."""
 
-    @patch("cumrag.runner.get_hardware_meta")
+    @patch("comprag.runner.get_hardware_meta")
     def _make_runner(self, mock_hw):
         """Create an EvalRunner with mocked dependencies."""
         mock_hw.return_value = {"gpu": "mock", "driver": "mock", "framework": "mock", "os": "mock"}
-        with patch("cumrag.runner.load_config") as mock_config:
+        with patch("comprag.runner.load_config") as mock_config:
             mock_config.return_value = {}
             runner = EvalRunner()
         return runner
@@ -850,10 +850,10 @@ class TestTimeoutConfig:
 class TestGeneratorTimeoutPassthrough:
     """The runner passes timeout_gen_s through to generate_with_metrics."""
 
-    @patch("cumrag.runner.get_hardware_meta")
+    @patch("comprag.runner.get_hardware_meta")
     def _make_runner(self, mock_hw):
         mock_hw.return_value = {"gpu": "mock", "driver": "mock", "framework": "mock", "os": "mock"}
-        with patch("cumrag.runner.load_config") as mock_config:
+        with patch("comprag.runner.load_config") as mock_config:
             mock_config.return_value = {}
             runner = EvalRunner()
         return runner
@@ -883,8 +883,8 @@ class TestGeneratorTimeoutPassthrough:
         )
         return mock_server
 
-    @patch("cumrag.runner.get_resource_snapshot", return_value={"vram_usage_mb": 1000})
-    @patch("cumrag.runner._get_gpu_temp", return_value=45)
+    @patch("comprag.runner.get_resource_snapshot", return_value={"vram_usage_mb": 1000})
+    @patch("comprag.runner._get_gpu_temp", return_value=45)
     def test_timeout_gen_passed_to_generate(self, mock_temp, mock_snap):
         """run_single passes timeout_gen_s to server.generate_with_metrics."""
         runner = self._make_runner()
@@ -908,8 +908,8 @@ class TestGeneratorTimeoutPassthrough:
             timeout_val = call_kwargs.args[1]
         assert timeout_val == 30, f"timeout not passed correctly: {call_kwargs}"
 
-    @patch("cumrag.runner.get_resource_snapshot", return_value={"vram_usage_mb": 1000})
-    @patch("cumrag.runner._get_gpu_temp", return_value=45)
+    @patch("comprag.runner.get_resource_snapshot", return_value={"vram_usage_mb": 1000})
+    @patch("comprag.runner._get_gpu_temp", return_value=45)
     def test_timeout_gen_none_passed_as_none(self, mock_temp, mock_snap):
         """When timeout_gen_s is None, None is passed as timeout."""
         runner = self._make_runner()

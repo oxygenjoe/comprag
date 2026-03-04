@@ -91,7 +91,7 @@ def load_aggregated_csv(csv_path: str | Path) -> pd.DataFrame:
     """Load an aggregated summary CSV into a DataFrame.
 
     Expects columns matching the v2 aggregated schema output by
-    cumrag.aggregator: model, quantization, hardware_tier, dataset,
+    comprag.aggregator: model, quantization, hardware_tier, dataset,
     eval_subset, n_runs, and {metric}_{mean,ci_low,ci_high,flagged} columns.
 
     Numeric columns are coerced; empty strings become NaN.

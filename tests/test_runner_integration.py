@@ -26,10 +26,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cumrag.generator import LlamaServer, format_prompt, load_prompt_template
-from cumrag.retriever import Retriever, resolve_collection_name
-from cumrag.runner import EvalRunner, load_dataset_queries
-from cumrag.utils import load_config
+from comprag.generator import LlamaServer, format_prompt, load_prompt_template
+from comprag.retriever import Retriever, resolve_collection_name
+from comprag.runner import EvalRunner, load_dataset_queries
+from comprag.utils import load_config
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -103,8 +103,8 @@ class TestRunnerLoadsConfig:
             name = resolve_collection_name(key, config)
             assert isinstance(name, str)
             assert len(name) > 0
-            assert name.startswith("cumrag_"), (
-                f"Collection name '{name}' for key '{key}' does not start with 'cumrag_'"
+            assert name.startswith("comprag_"), (
+                f"Collection name '{name}' for key '{key}' does not start with 'comprag_'"
             )
 
     def test_runner_hardware_meta(self, runner):
@@ -319,7 +319,7 @@ class TestRunnerHandlesMissingCollection:
             Retriever(
                 index_dir="index",
                 dataset="rgb",
-                collection_name="cumrag_nonexistent_collection_xyz_99999",
+                collection_name="comprag_nonexistent_collection_xyz_99999",
             )
 
     def test_runner_get_retriever_missing_subset(self, runner):
@@ -343,7 +343,7 @@ def test_runner_preflight_validation(config, collection_key):
     """validate_index() succeeds for all indexed dataset collections."""
     import chromadb
 
-    from cumrag.retriever import validate_index
+    from comprag.retriever import validate_index
 
     collection_name = resolve_collection_name(collection_key, config)
     client = chromadb.PersistentClient(path="index")

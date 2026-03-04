@@ -4,7 +4,7 @@ Manages llama-server process lifecycle and provides OpenAI-compatible
 API access for text generation. Supports server start/stop, health
 polling, prompt template injection, and performance metrics collection.
 
-Importable as module; also runnable as CLI via `python -m cumrag.generator`.
+Importable as module; also runnable as CLI via `python -m comprag.generator`.
 """
 
 import argparse
@@ -20,7 +20,7 @@ from typing import Any, Optional, Union
 
 import requests
 
-from cumrag.utils import Timer, get_logger, load_config
+from comprag.utils import Timer, get_logger, load_config
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -40,7 +40,7 @@ _REQUEST_TIMEOUT = 300  # seconds per generation request
 _MAX_CONNECT_RETRIES = 3
 _CONNECT_RETRY_DELAY = 2.0  # seconds between connection retries
 
-logger = get_logger("cumrag.generator")
+logger = get_logger("comprag.generator")
 
 
 # ---------------------------------------------------------------------------
@@ -112,9 +112,15 @@ def format_prompt(
             chunk_texts.append(f"[{i}] {text}")
 
     chunks_str = "\n\n".join(chunk_texts)
-    return template.replace("{retrieved_chunks}", chunks_str).replace(
-        "{query}", query
-    )
+
+    # Guard: if template has no {retrieved_chunks} placeholder (e.g. pass1_baseline),
+    # skip chunk injection entirely
+    if "{retrieved_chunks}" in template:
+        result = template.replace("{retrieved_chunks}", chunks_str)
+    else:
+        result = template
+
+    return result.replace("{query}", query)
 
 
 # ---------------------------------------------------------------------------
@@ -843,7 +849,7 @@ class LlamaServer:
 
 
 # ---------------------------------------------------------------------------
-# CLI mode — `python -m cumrag.generator`
+# CLI mode — `python -m comprag.generator`
 # ---------------------------------------------------------------------------
 
 

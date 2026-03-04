@@ -463,7 +463,7 @@ instead of depending on WikiExtractor. Do not attempt to use WikiExtractor on Py
 
 The eval harness automatically detects which hardware tier it is running on and logs this
 metadata into every JSONL result record. This is handled by `scripts/profile_hardware.py`
-and the underlying detection utilities in `cumrag/utils.py`.
+and the underlying detection utilities in `comprag/utils.py`.
 
 ### How It Works
 

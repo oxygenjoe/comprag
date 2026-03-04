@@ -6,10 +6,10 @@ Handles server lifecycle, fault tolerance, multi-seed runs, and the
 full (model x quant x hardware x dataset) evaluation matrix.
 
 Importable as module:
-    from cumrag.runner import EvalRunner, run_eval
+    from comprag.runner import EvalRunner, run_eval
 
 CLI:
-    python -m cumrag.runner \\
+    python -m comprag.runner \\
         --model models/llama-3.1-8b-instruct-q4_k_m.gguf \\
         --dataset rgb --subset noise_robustness \\
         --hardware-tier cpu --num-queries 10 \\
@@ -30,10 +30,10 @@ from typing import Any, Optional, Union
 
 import yaml
 
-from cumrag.evaluator import CombinedEvaluator, EvalSample
-from cumrag.generator import LlamaServer, format_prompt, load_prompt_template
-from cumrag.retriever import Retriever, resolve_collection_name, validate_index
-from cumrag.utils import (
+from comprag.evaluator import CombinedEvaluator, EvalSample
+from comprag.generator import LlamaServer, format_prompt, load_prompt_template
+from comprag.retriever import Retriever, resolve_collection_name, validate_index
+from comprag.utils import (
     Timer,
     append_jsonl,
     get_hardware_meta,
@@ -53,7 +53,7 @@ from cumrag.utils import (
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-logger = get_logger("cumrag.runner")
+logger = get_logger("comprag.runner")
 
 # Locked generation params per spec — no per-model overrides
 _LOCKED_GEN_PARAMS = {
@@ -680,6 +680,7 @@ class EvalRunner:
         self._server: Optional[LlamaServer] = None
         self._evaluator: Optional[CombinedEvaluator] = None
         self._template: Optional[str] = None
+        self._template_cache: dict[str, str] = {}  # pass_id -> template string
 
         # Current tier config (set via set_tier_config() before running
         # simulated tiers; None means no tier-specific overrides)
@@ -843,11 +844,75 @@ class EvalRunner:
             )
         return self._evaluator
 
-    def _get_template(self) -> str:
-        """Load and cache the prompt template."""
-        if self._template is None:
-            self._template = load_prompt_template(self._prompt_template_path)
-        return self._template
+    def _get_template(self, pass_id: Optional[str] = None) -> str:
+        """Load and cache the prompt template for a given pass.
+
+        Args:
+            pass_id: Pass identifier (e.g. 'pass1_baseline', 'pass2_loose').
+                If None, loads the legacy default template.
+
+        Returns:
+            Template string.
+        """
+        if pass_id is None:
+            # Legacy path: use the default template
+            if self._template is None:
+                self._template = load_prompt_template(self._prompt_template_path)
+            return self._template
+
+        if pass_id in self._template_cache:
+            return self._template_cache[pass_id]
+
+        # Look up template path from config passes block
+        passes_cfg = self.config.get("passes", {})
+        pass_cfg = passes_cfg.get(pass_id, {})
+        template_path = pass_cfg.get("template")
+
+        if template_path:
+            # Resolve relative to project root
+            resolved = _PROJECT_ROOT / template_path
+            self._template_cache[pass_id] = load_prompt_template(resolved)
+        else:
+            # Fallback: use default template
+            logger.warning(
+                "No template configured for pass '%s', using default", pass_id
+            )
+            self._template_cache[pass_id] = self._get_template(pass_id=None)
+
+        return self._template_cache[pass_id]
+
+    def _resolve_passes(
+        self, dataset: str, eval_subset: Optional[str] = None
+    ) -> list[str]:
+        """Resolve which passes to run for a given dataset/subset.
+
+        Looks up the pass_policy in config. The policy key is built as
+        ``{dataset}_{eval_subset}`` (e.g. ``rgb_counterfactual_robustness``).
+        Falls back to ``default`` policy.
+
+        Returns:
+            List of pass_id strings (e.g. ['pass1_baseline', 'pass2_loose', 'pass3_strict']).
+        """
+        pass_policy = self.config.get("pass_policy", {})
+        passes_cfg = self.config.get("passes", {})
+        all_pass_ids = list(passes_cfg.keys()) if passes_cfg else ["pass2_loose"]
+
+        # Build lookup key
+        if eval_subset:
+            policy_key = f"{dataset}_{eval_subset}"
+        else:
+            policy_key = dataset
+
+        policy = pass_policy.get(policy_key, pass_policy.get("default", ["pass2_loose"]))
+
+        if policy == "all":
+            return all_pass_ids
+        elif isinstance(policy, list):
+            return policy
+        elif isinstance(policy, str):
+            return [policy]
+        else:
+            return ["pass2_loose"]
 
     # --- Model metadata ---
 
@@ -1045,6 +1110,7 @@ class EvalRunner:
         run_id: int = 1,
         query_id: Optional[str] = None,
         skip_eval: bool = False,
+        pass_id: str = "pass2_loose",
         **kwargs: Any,
     ) -> dict:
         """Run one query through the full pipeline: retrieve -> generate -> score.
@@ -1075,6 +1141,7 @@ class EvalRunner:
             "quant": quantization,
             "hardware": hardware_tier,
             "seed": seed,
+            "pass": pass_id,
         }
 
         # Build the v2 result record
@@ -1095,33 +1162,44 @@ class EvalRunner:
         }
 
         try:
-            # 1. Retrieve top-k chunks
-            retriever = self._get_retriever(dataset, eval_subset=eval_subset)
-            with Timer() as t_retrieve:
-                chunks = retriever.retrieve(query, top_k=self._top_k)
+            # Determine whether this pass includes context
+            passes_cfg = self.config.get("passes", {})
+            pass_cfg = passes_cfg.get(pass_id, {})
+            include_context = pass_cfg.get("include_context", True)
 
-            # v2: structured retrieved_chunks with doc_id, text, distance, rank
-            retrieved_chunks = []
+            # 1. Retrieve top-k chunks (skip if pass doesn't use context)
+            chunks = []
             context_texts = []
-            for rank_idx, chunk in enumerate(chunks, start=1):
-                meta = chunk.get("metadata", {})
-                doc_id = meta.get("source", meta.get("doc_id", f"unknown_{rank_idx}"))
-                retrieved_chunks.append({
-                    "doc_id": doc_id,
-                    "text": chunk.get("text", ""),
-                    "distance": chunk.get("distance", 0.0),
-                    "rank": rank_idx,
-                })
-                context_texts.append(chunk.get("text", ""))
-            result_record["retrieved_chunks"] = retrieved_chunks
+            if include_context:
+                retriever = self._get_retriever(dataset, eval_subset=eval_subset)
+                with Timer() as t_retrieve:
+                    chunks = retriever.retrieve(query, top_k=self._top_k)
 
-            logger.debug(
-                "Retrieved %d chunks in %.1fms for query: %s",
-                len(chunks), t_retrieve.elapsed_ms, query[:80],
-            )
+                # v2: structured retrieved_chunks with doc_id, text, distance, rank
+                retrieved_chunks = []
+                for rank_idx, chunk in enumerate(chunks, start=1):
+                    meta = chunk.get("metadata", {})
+                    doc_id = meta.get("source", meta.get("doc_id", f"unknown_{rank_idx}"))
+                    retrieved_chunks.append({
+                        "doc_id": doc_id,
+                        "text": chunk.get("text", ""),
+                        "distance": chunk.get("distance", 0.0),
+                        "rank": rank_idx,
+                    })
+                    context_texts.append(chunk.get("text", ""))
+                result_record["retrieved_chunks"] = retrieved_chunks
 
-            # 2. Format prompt using locked template
-            template = self._get_template()
+                logger.debug(
+                    "Retrieved %d chunks in %.1fms for query: %s",
+                    len(chunks), t_retrieve.elapsed_ms, query[:80],
+                )
+            else:
+                logger.debug(
+                    "Pass '%s' skips retrieval (include_context=false)", pass_id,
+                )
+
+            # 2. Format prompt using pass-specific template
+            template = self._get_template(pass_id=pass_id)
             prompt = format_prompt(template, query, chunks)
 
             # Context window safety check
@@ -1328,12 +1406,15 @@ class EvalRunner:
             output_path = Path(output_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        total_runs = len(queries) * len(seeds)
+        # Resolve active passes for this dataset/subset
+        active_passes = self._resolve_passes(dataset, eval_subset)
+
+        total_runs = len(queries) * len(seeds) * len(active_passes)
         logger.info(
             "Starting eval: dataset=%s, subset=%s, model=%s (%s), "
-            "queries=%d, seeds=%s, total_runs=%d, output=%s",
+            "queries=%d, seeds=%s, passes=%s, total_runs=%d, output=%s",
             dataset, eval_subset, model_name, quantization,
-            len(queries), seeds, total_runs, output_path,
+            len(queries), seeds, active_passes, total_runs, output_path,
         )
 
         # Start server if model path provided (with retry support)
@@ -1418,7 +1499,8 @@ class EvalRunner:
                     ground_truth = query_data["ground_truth"]
                     query_id = query_data.get("id", query_data.get("query_id", f"q{q_idx}"))
 
-                    try:
+                    for pass_id in active_passes:
+                      try:
                         result = self.run_single(
                             query=question,
                             ground_truth=ground_truth,
@@ -1431,6 +1513,7 @@ class EvalRunner:
                             run_id=run_id,
                             query_id=str(query_id),
                             skip_eval=skip_eval,
+                            pass_id=pass_id,
                         )
 
                         append_jsonl(output_path, result)
@@ -1440,11 +1523,11 @@ class EvalRunner:
                         if result.get("error"):
                             errors += 1
 
-                    except MemoryError as mem_err:
+                      except MemoryError as mem_err:
                         # OOM — log and continue
                         logger.error(
-                            "OOM on query %d (seed=%d): %s",
-                            q_idx, seed, question[:60],
+                            "OOM on query %d (seed=%d, pass=%s): %s",
+                            q_idx, seed, pass_id, question[:60],
                         )
                         oom_record = {
                             "sample_id": str(query_id),
@@ -1459,6 +1542,7 @@ class EvalRunner:
                                 "quant": quantization,
                                 "hardware": hardware_tier,
                                 "seed": seed,
+                                "pass": pass_id,
                             },
                             "perf": {
                                 "ttft_ms": None,
@@ -1479,11 +1563,11 @@ class EvalRunner:
                         all_results.append(oom_record)
                         errors += 1
 
-                    except (ConnectionError, RuntimeError) as server_err:
+                      except (ConnectionError, RuntimeError) as server_err:
                         # Server may have crashed — attempt restart
                         logger.error(
-                            "Server error on query %d (seed=%d): %s",
-                            q_idx, seed, server_err,
+                            "Server error on query %d (seed=%d, pass=%s): %s",
+                            q_idx, seed, pass_id, server_err,
                         )
                         if model_path:
                             restarted = False
@@ -1516,6 +1600,7 @@ class EvalRunner:
                                         "quant": quantization,
                                         "hardware": hardware_tier,
                                         "seed": seed,
+                                        "pass": pass_id,
                                     },
                                     "perf": {
                                         "ttft_ms": None,
@@ -1535,7 +1620,7 @@ class EvalRunner:
                                 }
                                 append_jsonl(output_path, crash_record)
                                 all_results.append(crash_record)
-                                # Break out of both loops
+                                # Break out of all loops
                                 if progress:
                                     progress.close()
                                 return all_results
@@ -1546,10 +1631,11 @@ class EvalRunner:
                             )
                             break
 
-                    if progress:
+                      if progress:
                         progress.update(1)
                         progress.set_postfix(
                             ok=completed - errors, err=errors, seed=seed,
+                            p=pass_id,
                         )
 
         except KeyboardInterrupt:
