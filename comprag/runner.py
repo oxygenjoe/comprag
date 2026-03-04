@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Main eval loop for the CUMRAG benchmark harness.
+"""Main eval loop for the CompRAG benchmark harness.
 
 Orchestrates the full pipeline: retrieve -> generate -> score -> log.
 Handles server lifecycle, fault tolerance, multi-seed runs, and the
@@ -1836,7 +1836,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description=(
-            "CUMRAG eval runner -- orchestrate retrieve -> generate -> score -> log.\n"
+            "CompRAG eval runner -- orchestrate retrieve -> generate -> score -> log.\n"
             "Runs the full evaluation pipeline for a model on a dataset.\n\n"
             "Two modes:\n"
             "  Per-model:  --model <gguf_path> [--dataset ...]\n"
@@ -2009,7 +2009,7 @@ def _run_matrix_mode(args: argparse.Namespace) -> int:
     Returns:
         0 on success, 1 on partial failure, non-zero on fatal error.
     """
-    logger.info("CUMRAG Eval Runner starting (matrix mode)")
+    logger.info("CompRAG Eval Runner starting (matrix mode)")
     logger.info(
         "Matrix: %s, tier: %s", args.matrix, args.hardware_tier,
     )
@@ -2117,7 +2117,7 @@ def _run_single_model_mode(args: argparse.Namespace) -> int:
         # Generate seeds from num_runs
         seeds = list(range(42, 42 + args.num_runs))
 
-    logger.info("CUMRAG Eval Runner starting")
+    logger.info("CompRAG Eval Runner starting")
     logger.info(
         "Config: model=%s, dataset=%s, subset=%s, tier=%s, "
         "queries=%s, seeds=%s",

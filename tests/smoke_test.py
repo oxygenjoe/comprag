@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end smoke test for the CUMRAG eval harness.
+"""End-to-end smoke test for the CompRAG eval harness.
 
 NOT a unit test — a validation script that verifies the entire harness
 is wired up correctly. Tests imports, configs, module interfaces, and
@@ -1952,7 +1952,7 @@ def run_live_test(model_path: str, dataset: str) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="CUMRAG smoke test — validate harness is wired up correctly",
+        description="CompRAG smoke test — validate harness is wired up correctly",
     )
     parser.add_argument(
         "--live",
@@ -1977,7 +1977,7 @@ def main() -> int:
         parser.error("--live requires --model")
 
     print("=" * 60)
-    print("  CUMRAG Smoke Test")
+    print("  CompRAG Smoke Test")
     print("=" * 60)
     print()
 

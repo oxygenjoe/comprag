@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publication-quality visualization of CUMRAG evaluation results.
+"""Publication-quality visualization of CompRAG evaluation results.
 
 Generates six chart types from aggregated CSV data (v2 schema):
   1. Faithfulness by model (grouped bar)
@@ -741,7 +741,7 @@ def generate_all_charts(
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="CUMRAG Results Visualizer -- publication-quality charts from aggregated data",
+        description="CompRAG Results Visualizer -- publication-quality charts from aggregated data",
     )
     parser.add_argument(
         "--input",

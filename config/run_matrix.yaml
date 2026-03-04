@@ -1,4 +1,4 @@
-# CUMRAG Phase 1 Run Matrix v3
+# CompRAG Phase 1 Run Matrix v3
 # All CUDA. MI25/ROCm deferred. Simulated VRAM tiers on V100.
 # V100 32GB is superset of all tiers.
 

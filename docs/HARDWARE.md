@@ -1,4 +1,4 @@
-# HARDWARE.md -- CUMRAG Hardware Reference
+# HARDWARE.md -- CompRAG Hardware Reference
 
 All hardware in this project is surplus/eBay-grade. The thesis is that rigorous retrieval
 optimization on cheap iron beats throwing money at GPU compute. Every component listed here

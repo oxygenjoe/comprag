@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Normalize evaluation datasets into the unified CUMRAG JSONL schema.
+"""Normalize evaluation datasets into the unified CompRAG JSONL schema.
 
 Reads raw downloaded datasets (from download_datasets.py) and writes
 normalized JSONL files per subset under datasets/{name}/normalized/.
@@ -550,7 +550,7 @@ def normalize_all(
 def main() -> None:
     """CLI entry point for dataset normalization."""
     parser = argparse.ArgumentParser(
-        description="Normalize evaluation datasets into unified CUMRAG JSONL schema.",
+        description="Normalize evaluation datasets into unified CompRAG JSONL schema.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Datasets:\n"

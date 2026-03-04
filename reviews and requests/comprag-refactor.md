@@ -1,4 +1,4 @@
-# CUMRAG Refactoring Spec — Post-Review Fixes
+# CompRAG Refactoring Spec — Post-Review Fixes
 
 ## Context
 

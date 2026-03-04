@@ -1,4 +1,4 @@
-# CUMRAG Run Matrix Spec v3 — Claude Code Handoff
+# CompRAG Run Matrix Spec v3 — Claude Code Handoff
 
 ## Context
 
@@ -235,7 +235,7 @@ All V100 tiers (physical + simulated) run sequentially on one card. Simulated ti
 ### 1. Create `config/run_matrix.yaml`
 
 ```yaml
-# CUMRAG Phase 1 Run Matrix v3
+# CompRAG Phase 1 Run Matrix v3
 # All CUDA. MI25/ROCm deferred. Simulated VRAM tiers on V100.
 # V100 32GB is superset of all tiers.
 

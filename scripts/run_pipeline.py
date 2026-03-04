@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end CUMRAG evaluation pipeline orchestrator.
+"""End-to-end CompRAG evaluation pipeline orchestrator.
 
 Chains all pipeline stages in order:
     download -> normalize -> validate_datasets -> build_index
@@ -688,7 +688,7 @@ class Pipeline:
             ", ".join(self.steps),
         )
         print(f"\n{'='*60}")
-        print(f"CUMRAG Pipeline [{mode_label}{force_label}]")
+        print(f"CompRAG Pipeline [{mode_label}{force_label}]")
         print(f"Steps: {', '.join(self.steps)}")
         print(f"{'='*60}\n")
 
@@ -806,7 +806,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description=(
-            "CUMRAG end-to-end evaluation pipeline orchestrator.\n\n"
+            "CompRAG end-to-end evaluation pipeline orchestrator.\n\n"
             "Chains: download -> normalize -> validate_datasets -> build_index\n"
             "     -> validate_index -> run -> aggregate -> visualize"
         ),

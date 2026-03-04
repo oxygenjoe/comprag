@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup.sh — One-shot environment setup for CUMRAG eval harness
+# setup.sh — One-shot environment setup for CompRAG eval harness
 # Installs system deps, creates venv, installs Python deps, downloads spacy
 # model, builds llama.cpp, downloads/normalizes datasets, builds vector index.
 #
@@ -28,7 +28,7 @@ for arg in "$@"; do
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
-            echo "One-shot environment setup for CUMRAG eval harness."
+            echo "One-shot environment setup for CompRAG eval harness."
             echo "Each step is idempotent — safe to re-run."
             echo ""
             echo "Options:"
@@ -54,7 +54,7 @@ step() {
     echo "[${CURRENT_STEP}/${TOTAL_STEPS}] $1"
 }
 
-echo "=== CUMRAG Setup ==="
+echo "=== CompRAG Setup ==="
 echo "  skip-datasets: ${SKIP_DATASETS}"
 echo "  skip-index:    ${SKIP_INDEX}"
 echo "  skip-llama:    ${SKIP_LLAMA}"

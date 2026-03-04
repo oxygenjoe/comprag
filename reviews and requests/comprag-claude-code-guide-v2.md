@@ -1,4 +1,4 @@
-# CUMRAG: Implementation Guide for Claude Code
+# CompRAG: Implementation Guide for Claude Code
 
 ## v2.0 — Combined Spec + Refactor Fixes + Gap Fills
 
@@ -65,7 +65,7 @@ Add `context_length` to each model entry in `config/models.yaml`. Default to 409
 **Phase 2 (future):**
 - MS MARCO for retrieval quality isolation
 - RAGAS synthetic generation for domain-specific eval sets
-- Custom clinical lab informatics corpus (CUMRAG-Clinical)
+- Custom clinical lab informatics corpus (CompRAG-Clinical)
 
 ### Unified Internal Format
 
@@ -215,7 +215,7 @@ RAGChecker uses RefChecker under the hood, which requires an LLM for claim extra
 
 Use **Qwen 2.5 14B Instruct Q4_K_M** as the fixed judge model for all scoring runs.
 
-- The RAGChecker paper used Llama3-70B-Instruct. 70B won't fit on any CUMRAG hardware tier. Qwen 2.5 14B is the strongest model in the matrix that fits on the V100.
+- The RAGChecker paper used Llama3-70B-Instruct. 70B won't fit on any CompRAG hardware tier. Qwen 2.5 14B is the strongest model in the matrix that fits on the V100.
 - The judge model is **fixed for ALL scoring runs**. Never change it mid-benchmark. If you change it, re-score everything.
 - When scoring Qwen 2.5 14B Q4_K_M outputs, use Qwen 2.5 14B **Q8_0** as the judge (different quant = different model behavior). Document this in results.
 
@@ -263,11 +263,11 @@ The scoring pipeline (`evaluator.py`) must:
 
 ### RAGChecker Input Format Bridge
 
-Convert CUMRAG raw JSONL to RAGChecker's expected format in `evaluator.py`:
+Convert CompRAG raw JSONL to RAGChecker's expected format in `evaluator.py`:
 
 ```python
 def to_ragchecker_format(raw_results: list[dict]) -> dict:
-    """Convert CUMRAG raw JSONL entries to RAGChecker checking_inputs format."""
+    """Convert CompRAG raw JSONL entries to RAGChecker checking_inputs format."""
     return {
         "results": [
             {

@@ -1,4 +1,4 @@
-# CUMRAG Evaluation Configuration
+# CompRAG Evaluation Configuration
 # Reference: comprag-spec.md, comprag-claude-code-guide-v2.md
 # All parameters locked across runs for reproducibility.
 

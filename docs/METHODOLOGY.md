@@ -304,7 +304,7 @@ RGB is the primary evaluation dataset with four subsets, each testing a distinct
 
 RGB ships its own passages per question. These are indexed into per-subset ChromaDB collections (`comprag_rgb_noise_robustness_300w_<hash>`, etc.) so that retrieval tests the model's robustness to the provided passages, not retrieval quality. This is a critical design choice: RGB tests retrieval robustness, not retrieval quality. The retriever searches within per-sample passages, not a global corpus.
 
-Normalization from RGB's native JSON format to CUMRAG's unified JSONL schema is handled by `scripts/normalize_datasets.py`. Each entry maps `question` to `query`, `answer` to `ground_truth`, and preserves `passages` and `label` in the `metadata` field.
+Normalization from RGB's native JSON format to CompRAG's unified JSONL schema is handled by `scripts/normalize_datasets.py`. Each entry maps `question` to `query`, `answer` to `ground_truth`, and preserves `passages` and `label` in the `metadata` field.
 
 ### 5.2 Natural Questions (NQ)
 
@@ -363,7 +363,7 @@ The following datasets are planned for phase 2 but not included in the initial e
 
 - **MS MARCO:** For retrieval quality isolation (separating retrieval errors from generation errors)
 - **RAGAS synthetic generation:** For domain-specific eval sets
-- **CUMRAG-Clinical:** Custom clinical lab informatics corpus for domain-specific RAG evaluation
+- **CompRAG-Clinical:** Custom clinical lab informatics corpus for domain-specific RAG evaluation
 
 ## 6. Statistical Approach
 
@@ -555,7 +555,7 @@ judge:
 
 Key design decisions:
 
-- **Model choice:** Qwen 2.5 14B is the strongest model in the evaluation matrix that fits on the V100. The RAGChecker paper used Llama3-70B-Instruct, which requires 70B parameters -- far beyond what any CUMRAG hardware tier can serve. This quality ceiling is acknowledged in Section 8.1.
+- **Model choice:** Qwen 2.5 14B is the strongest model in the evaluation matrix that fits on the V100. The RAGChecker paper used Llama3-70B-Instruct, which requires 70B parameters -- far beyond what any CompRAG hardware tier can serve. This quality ceiling is acknowledged in Section 8.1.
 - **Port separation:** The judge server runs on port 8081, separate from the generation server on port 8080.
 - **Context length:** 8192 tokens. The judge processes individual claims (short) against retrieved chunks, not full documents. The full 32k context is unnecessary and would waste VRAM on KV cache.
 - **Temperature:** 0.0 for deterministic scoring.
@@ -659,7 +659,7 @@ On failure, `response` is `null` and `error` contains the error string (e.g., `"
 
 ### 8.1 Judge Model Quality Ceiling
 
-The judge model (Qwen 2.5 14B Q4_K_M) is the strongest model available on CUMRAG hardware, but it is significantly weaker than the judges used in the original RAGChecker paper (Llama3-70B-Instruct). Seventy-billion-parameter models require 35+ GB in Q4 quantization -- far beyond what any single CUMRAG hardware tier can serve. This creates a quality ceiling: the judge may fail to detect subtle faithfulness violations or incorrectly flag valid claims.
+The judge model (Qwen 2.5 14B Q4_K_M) is the strongest model available on CompRAG hardware, but it is significantly weaker than the judges used in the original RAGChecker paper (Llama3-70B-Instruct). Seventy-billion-parameter models require 35+ GB in Q4 quantization -- far beyond what any single CompRAG hardware tier can serve. This creates a quality ceiling: the judge may fail to detect subtle faithfulness violations or incorrectly flag valid claims.
 
 Mitigation: Results should be interpreted relative to each other within this benchmark, not compared directly to RAGChecker scores computed with stronger judges. The internal ranking of models (which model is most faithful) should be robust to judge quality as long as the judge's errors are not systematically correlated with specific generator models.
 

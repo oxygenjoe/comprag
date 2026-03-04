@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download evaluation datasets for the CUMRAG benchmark harness.
+"""Download evaluation datasets for the CompRAG benchmark harness.
 
 Downloads three datasets into the datasets/ directory:
   - RGB (Retrieval-Augmented Generation Benchmark) via git clone
@@ -343,7 +343,7 @@ def download_all(
 def main() -> None:
     """CLI entry point for dataset downloads."""
     parser = argparse.ArgumentParser(
-        description="Download evaluation datasets for the CUMRAG benchmark harness.",
+        description="Download evaluation datasets for the CompRAG benchmark harness.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Datasets:\n"

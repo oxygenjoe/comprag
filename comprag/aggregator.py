@@ -739,7 +739,7 @@ def main() -> None:
     """CLI entry point for the aggregator."""
     parser = argparse.ArgumentParser(
         description=(
-            "CUMRAG Results Aggregator — compute bootstrap CIs from raw JSONL results"
+            "CompRAG Results Aggregator — compute bootstrap CIs from raw JSONL results"
         ),
     )
     parser.add_argument(

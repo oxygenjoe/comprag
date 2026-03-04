@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hardware profiling script for CUMRAG eval harness.
+"""Hardware profiling script for CompRAG eval harness.
 
 Detects GPU/CPU/RAM/OS specs, matches detected hardware to a tier from
 hardware.yaml, and outputs the hardware_meta dict matching the spec schema.
@@ -445,7 +445,7 @@ def _format_profile(profile: dict, tier_id: str, tier_def: dict) -> str:
     """Format hardware profile for human-readable display."""
     lines = []
     lines.append("=" * 64)
-    lines.append("  CUMRAG Hardware Profile")
+    lines.append("  CompRAG Hardware Profile")
     lines.append("=" * 64)
     lines.append("")
 
@@ -509,7 +509,7 @@ def _format_profile(profile: dict, tier_id: str, tier_def: dict) -> str:
 def main() -> None:
     """CLI entry point for hardware profiling."""
     parser = argparse.ArgumentParser(
-        description="CUMRAG Hardware Profiler — detect GPU/CPU/RAM, match tier, output metadata",
+        description="CompRAG Hardware Profiler — detect GPU/CPU/RAM, match tier, output metadata",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""examples:
   python scripts/profile_hardware.py                  # Pretty-print profile

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dataset statistics and summary report for the CUMRAG eval harness.
+"""Dataset statistics and summary report for the CompRAG eval harness.
 
 Generates a diagnostic report covering:
 1. Raw data status — existence of downloaded dataset directories and key files
@@ -607,7 +607,7 @@ def main() -> int:
         0 on success (all checks pass), 1 if any gaps detected.
     """
     parser = argparse.ArgumentParser(
-        description="Generate dataset statistics and summary report for the CUMRAG eval harness.",
+        description="Generate dataset statistics and summary report for the CompRAG eval harness.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Sections reported:\n"

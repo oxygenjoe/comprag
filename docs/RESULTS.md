@@ -1,4 +1,4 @@
-# CUMRAG Evaluation Results
+# CompRAG Evaluation Results
 
 ## 1. Executive Summary
 

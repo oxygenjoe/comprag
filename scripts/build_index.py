@@ -56,7 +56,7 @@ DATASETS_DIR = _PROJECT_ROOT / "datasets"
 INDEX_DIR = _PROJECT_ROOT / "index"
 
 EMBEDDING_DIM = 384
-CUMRAG_VERSION = "2.0"
+COMPRAG_VERSION = "2.0"
 
 
 def _get_embedding_model_name() -> str:
@@ -537,7 +537,7 @@ def build_index(
             "dataset": dataset_name,
             "subset": subset or "",
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "comprag_version": CUMRAG_VERSION,
+            "comprag_version": COMPRAG_VERSION,
         }
 
         collection = client.get_or_create_collection(
@@ -770,7 +770,7 @@ def build_rgb_index(
             "num_samples": len(samples),
             "num_passages": num_passages,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "comprag_version": CUMRAG_VERSION,
+            "comprag_version": COMPRAG_VERSION,
         }
 
         collection = client.get_or_create_collection(
@@ -991,7 +991,7 @@ def build_nq_index(
             "index_type": "nq_normalized_test",
             "num_samples": len(samples),
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "comprag_version": CUMRAG_VERSION,
+            "comprag_version": COMPRAG_VERSION,
         }
 
         collection = client.get_or_create_collection(
@@ -1197,7 +1197,7 @@ def build_halueval_index(
             "index_type": "halueval_knowledge",
             "num_samples": len(samples),
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "comprag_version": CUMRAG_VERSION,
+            "comprag_version": COMPRAG_VERSION,
         }
 
         collection = client.get_or_create_collection(

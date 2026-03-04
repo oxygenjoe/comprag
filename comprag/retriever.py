@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ChromaDB query interface for the CUMRAG eval harness.
+"""ChromaDB query interface for the CompRAG eval harness.
 
 Retrieves top-k chunks from pre-built ChromaDB vector indexes. The retrieval
 pipeline is CONSTANT across all eval runs — same embedding model, same index,
@@ -437,7 +437,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description=(
-            "Query the CUMRAG ChromaDB vector index. "
+            "Query the CompRAG ChromaDB vector index. "
             "Retrieves top-k chunks for a given query from a pre-built index."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,

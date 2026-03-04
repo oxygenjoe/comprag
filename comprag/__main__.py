@@ -2,7 +2,7 @@
 
 print(
     """\
-CUMRAG - Comparative Utilization Metrics for Retrieval-Augmented Generation
+CompRAG - Comparative Retrieval-Augmented Generation Evaluation
 
 Available modules:
   python -m comprag.runner      Run evaluation harness

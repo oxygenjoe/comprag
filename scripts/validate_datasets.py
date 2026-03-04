@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate normalized JSONL datasets against the unified CUMRAG schema.
+"""Validate normalized JSONL datasets against the unified CompRAG schema.
 
 Checks every normalized JSONL record for schema conformance:
 - sample_id: string, matches pattern {dataset}_{subset}_{index:04d}
@@ -379,7 +379,7 @@ def validate_datasets(
 def main() -> int:
     """CLI entry point. Returns exit code (0=clean, 1=violations found)."""
     parser = argparse.ArgumentParser(
-        description="Validate normalized JSONL datasets against the unified CUMRAG schema.",
+        description="Validate normalized JSONL datasets against the unified CompRAG schema.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Schema contract (per JSONL record):\n"

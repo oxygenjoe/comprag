@@ -1,4 +1,4 @@
-"""llama.cpp server interface for the CUMRAG eval harness.
+"""llama.cpp server interface for the CompRAG eval harness.
 
 Manages llama-server process lifecycle and provides OpenAI-compatible
 API access for text generation. Supports server start/stop, health
@@ -856,7 +856,7 @@ class LlamaServer:
 def main() -> None:
     """Entry point for CLI mode. Starts server, runs a test query, stops."""
     parser = argparse.ArgumentParser(
-        description="CUMRAG generator — llama.cpp server interface",
+        description="CompRAG generator — llama.cpp server interface",
     )
     subparsers = parser.add_subparsers(dest="command", help="Sub-commands")
 

@@ -1,4 +1,4 @@
-"""RAGAS + RAGChecker evaluation wrapper for CUMRAG.
+"""RAGAS + RAGChecker evaluation wrapper for CompRAG.
 
 Provides scoring pipelines for RAG faithfulness, context utilization,
 self-knowledge, noise sensitivity, and answer relevancy. Wraps both
@@ -394,7 +394,7 @@ def stop_generation_server(
 def to_ragchecker_format(raw_results: list[dict]) -> dict:
     """Convert raw evaluation results to RAGChecker's expected input format.
 
-    Maps the CUMRAG result schema to RAGChecker's JSON structure:
+    Maps the CompRAG result schema to RAGChecker's JSON structure:
       - sample_id -> query_id
       - query -> query
       - ground_truth -> gt_answer
@@ -1220,7 +1220,7 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="CUMRAG Evaluator -- score RAG outputs with RAGAS + RAGChecker",
+        description="CompRAG Evaluator -- score RAG outputs with RAGAS + RAGChecker",
     )
     parser.add_argument(
         "--input", "-i",

@@ -1,4 +1,4 @@
-"""Shared utilities for the CUMRAG eval harness.
+"""Shared utilities for the CompRAG eval harness.
 
 Provides JSONL I/O, timing utilities, hardware metadata collection,
 resource monitoring, YAML config loading, reproducibility seed setter,
@@ -571,7 +571,7 @@ def get_resource_snapshot() -> dict:
 def _print_hardware_info() -> None:
     """Print hardware info to stdout (CLI mode)."""
     print("=" * 60)
-    print("CUMRAG Hardware Info")
+    print("CompRAG Hardware Info")
     print("=" * 60)
 
     info = get_hardware_full()
@@ -598,7 +598,7 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="CUMRAG utilities — print hardware info and run diagnostics",
+        description="CompRAG utilities — print hardware info and run diagnostics",
     )
     parser.add_argument(
         "--json",

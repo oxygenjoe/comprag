@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit ChromaDB index integrity for the CUMRAG eval harness.
+"""Audit ChromaDB index integrity for the CompRAG eval harness.
 
 Validates all ChromaDB collections in the index directory against
 eval_config.yaml parameters, checks sample entries for valid fields,
@@ -342,7 +342,7 @@ def print_report(reports: list[CollectionReport]) -> None:
 
     print()
     print(sep)
-    print("CUMRAG ChromaDB Index Validation Report")
+    print("CompRAG ChromaDB Index Validation Report")
     print(sep)
     print(header)
     print("-" * len(header))
@@ -393,7 +393,7 @@ def print_report(reports: list[CollectionReport]) -> None:
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Validate ChromaDB index integrity for the CUMRAG eval harness.",
+        description="Validate ChromaDB index integrity for the CompRAG eval harness.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"

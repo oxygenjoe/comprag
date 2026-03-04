@@ -1,4 +1,4 @@
-"""CUMRAG: Comparative Utilization Metrics for Retrieval-Augmented Generation
+"""CompRAG: Comparative Retrieval-Augmented Generation Evaluation
 
 Benchmark harness evaluating RAG faithfulness across small language models,
 quantization levels, and hardware tiers on surplus/consumer hardware.
