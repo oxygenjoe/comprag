@@ -6,7 +6,10 @@ No manual chat template tokens — the server or API handles wrapping.
 
 from __future__ import annotations
 
+import json
 import logging
+import time
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -76,3 +79,42 @@ def build_messages(
 
     logger.debug("Built %d message(s) for %s", len(messages), pass_name)
     return messages
+
+
+def generate_local(
+    messages: list[dict],
+    server_url: str = "http://localhost:8080",
+) -> tuple[str, int]:
+    """POST to /v1/chat/completions. Returns (response_text, time_ms).
+
+    Locked: temperature=0.0, max_tokens=512, seed=42.
+
+    Args:
+        messages: OpenAI-style messages array.
+        server_url: Base URL of the llama.cpp server.
+
+    Returns:
+        Tuple of (generated text, wall-clock milliseconds).
+    """
+    payload = json.dumps({
+        "messages": messages,
+        "temperature": 0.0,
+        "max_tokens": 512,
+        "seed": 42,
+    }).encode()
+
+    req = urllib.request.Request(
+        f"{server_url}/v1/chat/completions",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    t0 = time.monotonic()
+    with urllib.request.urlopen(req) as resp:
+        body = json.loads(resp.read())
+    time_ms = int((time.monotonic() - t0) * 1000)
+
+    text = body["choices"][0]["message"]["content"]
+    logger.debug("generate_local: %d tokens in %d ms", len(text.split()), time_ms)
+    return text, time_ms
