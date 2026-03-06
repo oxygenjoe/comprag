@@ -15,6 +15,15 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from langchain_openai import ChatOpenAI
+from ragas import EvaluationDataset, SingleTurnSample, evaluate
+from ragas.llms import LangchainLLMWrapper
+from ragas.metrics.collections import (
+    answer_relevancy,
+    context_precision,
+    context_recall,
+    faithfulness,
+)
 from ragchecker import RAGChecker, RAGResult, RAGResults
 from ragchecker.container import RetrievedDoc
 
@@ -151,3 +160,76 @@ def score_ragchecker(
     metrics = _extract_target_metrics(results.results[0])
     logger.info("RAGChecker scores: %s", metrics)
     return metrics
+
+
+_RAGAS_METRICS = [faithfulness, answer_relevancy, context_precision, context_recall]
+_RAGAS_METRIC_NAMES = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
+
+
+def _build_ragas_llm(judge_mode: str) -> LangchainLLMWrapper:
+    """Build a RAGAS-compatible LLM wrapper routed by judge mode."""
+    if judge_mode == "frontier":
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError("Missing ANTHROPIC_API_KEY for frontier judge")
+        llm = ChatOpenAI(
+            model=f"anthropic/{FRONTIER_JUDGE_MODEL}",
+            api_key=api_key,
+            temperature=JUDGE_TEMPERATURE,
+            max_tokens=JUDGE_MAX_TOKENS,
+        )
+        return LangchainLLMWrapper(llm)
+    if judge_mode == "local":
+        llm = ChatOpenAI(
+            model=LOCAL_JUDGE_MODEL,
+            base_url=f"http://localhost:{LOCAL_JUDGE_PORT}/v1",
+            api_key="not-needed",
+            temperature=JUDGE_TEMPERATURE,
+            max_tokens=JUDGE_MAX_TOKENS,
+        )
+        return LangchainLLMWrapper(llm)
+    raise ValueError(f"Unknown judge_mode '{judge_mode}'. Expected 'frontier' or 'local'.")
+
+
+def _build_ragas_sample(
+    query: str, response: str, context: list[str], ground_truth: str,
+) -> SingleTurnSample:
+    """Construct a RAGAS SingleTurnSample from raw inputs."""
+    return SingleTurnSample(
+        user_input=query,
+        response=response,
+        retrieved_contexts=context,
+        reference=ground_truth,
+    )
+
+
+def score_ragas(
+    query: str,
+    response: str,
+    context: list[str],
+    ground_truth: str,
+    judge_mode: str = "frontier",
+) -> dict[str, float]:
+    """Score a single RAG result using RAGAS metrics.
+
+    Returns:
+        {"faithfulness": float, "answer_relevancy": float,
+         "context_precision": float, "context_recall": float}
+
+    Args:
+        query: The user's question.
+        response: The model's generated response.
+        context: Retrieved text chunks provided to the model.
+        ground_truth: Reference answer for evaluation.
+        judge_mode: "frontier" (Anthropic API) or "local" (Command R on llama.cpp).
+    """
+    llm = _build_ragas_llm(judge_mode)
+    sample = _build_ragas_sample(query, response, context, ground_truth)
+    dataset = EvaluationDataset(samples=[sample])
+
+    logger.info("Running RAGAS evaluation (judge_mode=%s)", judge_mode)
+    result = evaluate(dataset=dataset, metrics=_RAGAS_METRICS, llm=llm)
+
+    scores = {name: float(result.scores[0].get(name, 0.0)) for name in _RAGAS_METRIC_NAMES}
+    logger.info("RAGAS scores: %s", scores)
+    return scores
