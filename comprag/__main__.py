@@ -62,6 +62,13 @@ def cmd_generate(args: argparse.Namespace) -> None:
     output_path = output_dir / f"{args.model}_{args.dataset}_{pass_name}.jsonl"
 
     if args.frontier:
+        # Frontier models only run pass2_loose and pass3_strict (frontier.yaml contract)
+        if pass_name not in ("pass2_loose", "pass3_strict"):
+            logger.error(
+                "Frontier models only support pass2_loose and pass3_strict, got '%s'",
+                pass_name,
+            )
+            sys.exit(1)
         _run_generate_frontier(args, queries, pass_name, run_id, output_path)
     else:
         _run_generate_local(args, queries, pass_name, run_id, output_path)
