@@ -180,3 +180,83 @@ def plot_preference_gap_vs_quant(
     _finish_axes(ax, "Preference Gap (Pass3 CU - Pass2 CU)",
                  "Preference Gap vs Quantization Level")
     return _save_fig(fig, Path(output_dir) / "preference_gap_vs_quant.png")
+
+
+# --- Cross-architecture pair definitions ---
+_CROSS_PAIRS: list[tuple[str, str]] = [
+    ("qwen2.5-7b-instruct", "llama-3.1-8b-instruct"),
+    ("qwen2.5-14b-instruct", "phi-4-14b"),
+]
+
+
+def plot_cross_architecture(
+    records: list[dict[str, Any]], output_dir: str,
+) -> Path:
+    """Paired panels comparing similar-size models on CU vs quantization."""
+    local = _filter_local(records, "pass3")
+    frontier = _get_frontier(records, "pass3")
+    fig, axes = plt.subplots(1, len(_CROSS_PAIRS), figsize=(14, 6), sharey=True)
+    if len(_CROSS_PAIRS) == 1:
+        axes = [axes]
+    for ax, (model_a, model_b) in zip(axes, _CROSS_PAIRS):
+        pair_recs = [r for r in local if r["model"] in (model_a, model_b)]
+        series = _build_series(pair_recs, "cu")
+        _plot_series_on_ax(ax, series)
+        _draw_frontier_lines(ax, frontier, "cu")
+        _finish_axes(ax, "CU", f"{model_a} vs {model_b}")
+    return _save_fig(fig, Path(output_dir) / "cross_architecture.png")
+
+
+def plot_rgb_negative_rejection(
+    records: list[dict[str, Any]], output_dir: str,
+) -> Path:
+    """CU on negative-rejection subset only (gullibility check, high CU = bad)."""
+    neg = [r for r in records if r.get("subset") == "negative_rejection"
+           and _quant_x(r.get("quantization", "")) is not None
+           and r.get("source", "local") == "local"
+           and r["pass"].startswith("pass3")]
+    frontier = [r for r in records if r.get("subset") == "negative_rejection"
+                and r.get("source") == "frontier"
+                and r["pass"].startswith("pass3")]
+    series = _build_series(neg, "cu")
+    fig, ax = plt.subplots(figsize=(10, 6))
+    _plot_series_on_ax(ax, series)
+    _draw_frontier_lines(ax, frontier, "cu")
+    ax.invert_yaxis()
+    _finish_axes(ax, "CU (lower = better)", "Negative Rejection: Gullibility Check")
+    return _save_fig(fig, Path(output_dir) / "rgb_negative_rejection.png")
+
+
+def plot_smollm2_floor(
+    records: list[dict[str, Any]], output_dir: str,
+) -> Path:
+    """Standalone panel: does sub-2B SmolLM2 produce any CU/SK signal?"""
+    smol = [r for r in records if r["model"] == "smollm2-1.7b-instruct"
+            and _quant_x(r.get("quantization", "")) is not None
+            and r.get("source", "local") == "local"
+            and r["pass"].startswith("pass3")]
+    fig, (ax_cu, ax_sk) = plt.subplots(1, 2, figsize=(12, 5))
+    for ax, metric, label in [
+        (ax_cu, "cu", "CU"), (ax_sk, "sk", "SK"),
+    ]:
+        series = _build_series(smol, metric)
+        _plot_series_on_ax(ax, series, marker="D")
+        frontier = _get_frontier(records, "pass3")
+        _draw_frontier_lines(ax, frontier, metric)
+        _finish_axes(ax, label, f"SmolLM2 1.7B — {label} vs Quantization")
+    return _save_fig(fig, Path(output_dir) / "smollm2_floor.png")
+
+
+def generate_all_figures(input_dir: str, output_dir: str) -> list[Path]:
+    """Orchestrator: load data once, call all 6 plot functions, return paths."""
+    records = load_aggregated(input_dir)
+    paths: list[Path] = [
+        plot_cu_vs_quant(records, output_dir),
+        plot_sk_vs_quant(records, output_dir),
+        plot_preference_gap_vs_quant(records, output_dir),
+        plot_cross_architecture(records, output_dir),
+        plot_rgb_negative_rejection(records, output_dir),
+        plot_smollm2_floor(records, output_dir),
+    ]
+    logger.info("Generated %d figures in %s", len(paths), output_dir)
+    return paths
