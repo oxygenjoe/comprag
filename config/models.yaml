@@ -1,0 +1,79 @@
+models:
+  qwen2.5-14b-instruct:
+    display_name: "Qwen 2.5 14B Instruct"
+    params: 14B
+    role: primary
+    hf_repo: "bartowski/Qwen2.5-14B-Instruct-GGUF"
+    quants:
+      Q3_K_M: "Qwen2.5-14B-Instruct-Q3_K_M.gguf"
+      Q4_K_M: "Qwen2.5-14B-Instruct-Q4_K_M.gguf"
+      Q5_K_M: "Qwen2.5-14B-Instruct-Q5_K_M.gguf"
+      Q6_K:   "Qwen2.5-14B-Instruct-Q6_K.gguf"
+      Q8_0:   "Qwen2.5-14B-Instruct-Q8_0.gguf"
+      FP16:   "Qwen2.5-14B-Instruct-f16.gguf"
+
+  phi-4-14b:
+    display_name: "Phi-4 14B"
+    params: 14B
+    role: primary
+    hf_repo: "bartowski/phi-4-GGUF"
+    quants:
+      Q3_K_M: "phi-4-Q3_K_M.gguf"
+      Q4_K_M: "phi-4-Q4_K_M.gguf"
+      Q5_K_M: "phi-4-Q5_K_M.gguf"
+      Q6_K:   "phi-4-Q6_K.gguf"
+      Q8_0:   "phi-4-Q8_0.gguf"
+      FP16:   "phi-4-f16.gguf"
+
+  llama-3.1-8b-instruct:
+    display_name: "Llama 3.1 8B Instruct"
+    params: 8B
+    role: primary
+    hf_repo: "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF"
+    quants:
+      Q3_K_M: "Meta-Llama-3.1-8B-Instruct-Q3_K_M.gguf"
+      Q4_K_M: "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+      Q5_K_M: "Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf"
+      Q6_K:   "Meta-Llama-3.1-8B-Instruct-Q6_K.gguf"
+      Q8_0:   "Meta-Llama-3.1-8B-Instruct-Q8_0.gguf"
+      FP16:   "Meta-Llama-3.1-8B-Instruct-f16.gguf"
+
+  qwen2.5-7b-instruct:
+    display_name: "Qwen 2.5 7B Instruct"
+    params: 7B
+    role: primary
+    hf_repo: "bartowski/Qwen2.5-7B-Instruct-GGUF"
+    quants:
+      Q3_K_M: "Qwen2.5-7B-Instruct-Q3_K_M.gguf"
+      Q4_K_M: "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+      Q5_K_M: "Qwen2.5-7B-Instruct-Q5_K_M.gguf"
+      Q6_K:   "Qwen2.5-7B-Instruct-Q6_K.gguf"
+      Q8_0:   "Qwen2.5-7B-Instruct-Q8_0.gguf"
+      FP16:   "Qwen2.5-7B-Instruct-f16.gguf"
+
+  mistral-nemo-12b-instruct:
+    display_name: "Mistral NeMo 12B Instruct"
+    params: 12B
+    role: secondary
+    hf_repo: "bartowski/Mistral-Nemo-Instruct-2407-GGUF"
+    quants:
+      Q4_K_M: "Mistral-Nemo-Instruct-2407-Q4_K_M.gguf"
+      Q8_0:   "Mistral-Nemo-Instruct-2407-Q8_0.gguf"
+
+  gemma-2-9b-instruct:
+    display_name: "Gemma 2 9B Instruct"
+    params: 9B
+    role: secondary
+    hf_repo: "bartowski/gemma-2-9b-it-GGUF"
+    quants:
+      Q4_K_M: "gemma-2-9b-it-Q4_K_M.gguf"
+      Q8_0:   "gemma-2-9b-it-Q8_0.gguf"
+
+  smollm2-1.7b-instruct:
+    display_name: "SmolLM2 1.7B Instruct"
+    params: 1.7B
+    role: floor
+    hf_repo: "bartowski/SmolLM2-1.7B-Instruct-GGUF"
+    quants:
+      Q8_0: "SmolLM2-1.7B-Instruct-Q8_0.gguf"
+      FP16: "SmolLM2-1.7B-Instruct-f16.gguf"
