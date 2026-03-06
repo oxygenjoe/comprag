@@ -1,0 +1,61 @@
+retrieval:
+  embedding_model: "all-MiniLM-L6-v2"
+  chunk_size_words: 300
+  overlap_words: 64
+  top_k: 5
+  index_dir: "index/"
+
+generation:
+  # ALL LOCKED. No per-model overrides.
+  temperature: 0.0
+  max_tokens: 512
+  seed: 42
+  local_server_port: 8080
+
+judge:
+  primary:
+    provider: "anthropic"
+    model_id: "claude-sonnet-4-5-20250929"
+    temperature: 0.0
+    max_tokens: 1024
+  fallback:
+    model: "c4ai-command-r-v01"
+    quant: "Q4_K_M"
+    hf_repo: "bartowski/c4ai-command-r-08-2024-GGUF"
+    gguf: "c4ai-command-r-08-2024-Q4_K_M.gguf"
+    port: 8081
+    ctx_len: 8192
+    temperature: 0.0
+
+scoring:
+  primary: ragchecker
+  baseline: ragas
+
+statistics:
+  bootstrap_resamples: 1000
+  confidence_level: 0.95
+  capability_degradation_threshold: 0.30  # pass3 CU below this = degraded
+
+datasets:
+  rgb:
+    source: "https://github.com/chen700564/RGB"
+    subsets: [noise_robustness, negative_rejection, counterfactual]
+    pass_policy:
+      counterfactual: [pass1_baseline, pass2_loose, pass3_strict]
+      default: [pass2_loose]
+  nq:
+    source: "huggingface:nq_open"
+    subsets: [default]
+    pass_policy:
+      default: [pass2_loose]
+  halueval:
+    source: "https://github.com/RUCAIBox/HaluEval"
+    subsets: [default]
+    pass_policy:
+      default: [pass2_loose]
+
+judge_validation:
+  sample_size: 100
+  primary_arch_sample: 50
+  secondary_arch_sample: 50
+  agreement_threshold_kappa: 0.80
