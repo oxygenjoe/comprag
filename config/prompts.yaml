@@ -1,0 +1,25 @@
+pass1_baseline:
+  # No system message. Just the query as a user message.
+  system: null
+  user: "{query}"
+  include_context: false
+
+pass2_loose:
+  # Neutral framing. Context embedded in user message.
+  system: null
+  user: |
+    I have some background information that might be helpful:
+    {context}
+
+    Based on that, {query}
+  include_context: true
+
+pass3_strict:
+  # Explicit instruction via system message. Context in user message.
+  system: "Answer using ONLY the provided context. If the answer is not in the context, say \"I do not know.\""
+  user: |
+    Context:
+    {context}
+
+    {query}
+  include_context: true
