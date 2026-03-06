@@ -1,0 +1,28 @@
+# CompRAG - Benchmark harness for quantization vs retrieval
+# Install: pip install -r requirements.txt
+
+# --- Core ---
+numpy>=1.24.0
+matplotlib>=3.7.0
+pyyaml>=6.0
+
+# --- Retrieval ---
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+
+# --- Generation (frontier APIs) ---
+openai>=1.0.0
+anthropic>=0.25.0
+google-generativeai>=0.5.0
+
+# --- Scoring ---
+ragchecker>=1.0.0
+ragas>=0.1.0
+langchain-openai>=0.1.0
+
+# --- Testing ---
+pytest>=7.0.0
+
+# --- Scripts (dataset + model download) ---
+huggingface_hub>=0.20.0
+datasets>=2.14.0
