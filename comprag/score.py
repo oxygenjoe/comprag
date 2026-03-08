@@ -46,6 +46,8 @@ _JUDGE_PROVIDER_CONFIG: dict[str, dict[str, str]] = {
     "google": {"prefix": "gemini", "env": "GOOGLE_API_KEY"},
     "deepseek": {"prefix": "deepseek", "env": "DEEPSEEK_API_KEY",
                  "base_url": "https://api.deepseek.com/v1"},
+    "zhipu": {"prefix": "openai", "env": "ZHIPU_API_KEY",
+              "base_url": "https://open.bigmodel.cn/api/paas/v4"},
 }
 
 

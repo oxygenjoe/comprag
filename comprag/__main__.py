@@ -305,7 +305,7 @@ def _add_score_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("score", help="Score a results JSONL file")
     p.add_argument("--input", type=str, required=True, help="Path to raw results JSONL")
     p.add_argument("--judge-provider", type=str, default="anthropic",
-                   choices=["anthropic", "openai", "google", "deepseek"],
+                   choices=["anthropic", "openai", "google", "deepseek", "zhipu"],
                    help="Frontier API provider for judge")
     p.add_argument("--judge-model", type=str, default="claude-opus-4-6",
                    help="Model ID for the judge")
