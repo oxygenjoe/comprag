@@ -1,7 +1,7 @@
 """Golden-file validation tests for CompRAG JSONL schemas.
 
 Tests the raw per-query JSONL record schema and the aggregated output schema
-as defined in COMPRAG-V7-CLEAN-BUILD-SPEC-3.md (Output Schema section).
+as defined in COMPRAG-V8-BUILD-SPEC-1.md (Output Schema section).
 """
 
 from __future__ import annotations
@@ -37,9 +37,17 @@ RAW_RECORD_FIELDS: dict[str, type | tuple[type, ...]] = {
 }
 
 SCORES_RAGCHECKER_FIELDS: dict[str, type | tuple[type, ...]] = {
+    "overall_precision": (int, float),
+    "overall_recall": (int, float),
+    "overall_f1": (int, float),
+    "claim_recall": (int, float),
+    "context_precision": (int, float),
     "context_utilization": (int, float),
     "self_knowledge": (int, float),
-    "noise_sensitivity": (int, float),
+    "noise_sensitivity_relevant": (int, float),
+    "noise_sensitivity_irrelevant": (int, float),
+    "hallucination": (int, float),
+    "faithfulness": (int, float),
 }
 
 SCORES_RAGAS_FIELDS: dict[str, type | tuple[type, ...]] = {
@@ -65,7 +73,13 @@ AGGREGATED_RECORD_FIELDS: dict[str, type | tuple[type, ...]] = {
     "capability_degraded": bool,
 }
 
-METRIC_KEYS = {"cu", "sk", "ns", "preference_gap"}
+METRIC_KEYS = {
+    "cu", "sk", "ns_relevant", "ns_irrelevant",
+    "hallucination", "faithfulness",
+    "overall_precision", "overall_recall", "overall_f1",
+    "claim_recall", "context_precision",
+    "preference_gap",
+}
 METRIC_STAT_FIELDS: dict[str, type | tuple[type, ...]] = {
     "mean": (int, float),
     "ci_lo": (int, float),
@@ -99,9 +113,17 @@ def _valid_raw_record() -> dict[str, Any]:
         "generation_time_ms": 1234,
         "scores": {
             "ragchecker": {
+                "overall_precision": 0.78,
+                "overall_recall": 0.65,
+                "overall_f1": 0.71,
+                "claim_recall": 0.82,
+                "context_precision": 0.60,
                 "context_utilization": 0.85,
                 "self_knowledge": 0.12,
-                "noise_sensitivity": 0.05,
+                "noise_sensitivity_relevant": 0.08,
+                "noise_sensitivity_irrelevant": 0.02,
+                "hallucination": 0.05,
+                "faithfulness": 0.93,
             },
             "ragas": {
                 "faithfulness": 0.90,
@@ -126,7 +148,15 @@ def _valid_aggregated_record() -> dict[str, Any]:
         "metrics": {
             "cu": {"mean": 0.72, "ci_lo": 0.68, "ci_hi": 0.76, "std": 0.15},
             "sk": {"mean": 0.25, "ci_lo": 0.21, "ci_hi": 0.29, "std": 0.12},
-            "ns": {"mean": 0.08, "ci_lo": 0.05, "ci_hi": 0.11, "std": 0.06},
+            "ns_relevant": {"mean": 0.08, "ci_lo": 0.05, "ci_hi": 0.11, "std": 0.06},
+            "ns_irrelevant": {"mean": 0.03, "ci_lo": 0.01, "ci_hi": 0.05, "std": 0.03},
+            "hallucination": {"mean": 0.05, "ci_lo": 0.03, "ci_hi": 0.08, "std": 0.04},
+            "faithfulness": {"mean": 0.93, "ci_lo": 0.90, "ci_hi": 0.96, "std": 0.05},
+            "overall_precision": {"mean": 0.78, "ci_lo": 0.74, "ci_hi": 0.82, "std": 0.10},
+            "overall_recall": {"mean": 0.65, "ci_lo": 0.60, "ci_hi": 0.70, "std": 0.12},
+            "overall_f1": {"mean": 0.71, "ci_lo": 0.66, "ci_hi": 0.75, "std": 0.11},
+            "claim_recall": {"mean": 0.82, "ci_lo": 0.78, "ci_hi": 0.86, "std": 0.08},
+            "context_precision": {"mean": 0.60, "ci_lo": 0.55, "ci_hi": 0.65, "std": 0.09},
             "preference_gap": {"mean": 0.13, "ci_lo": 0.09, "ci_hi": 0.17, "std": 0.10},
         },
         "capability_degraded": False,
@@ -401,8 +431,8 @@ class TestAggregatedRecordSchema:
 
     def test_metric_wrong_stat_type_fails(self) -> None:
         record = _valid_aggregated_record()
-        record["metrics"]["sk"]["mean"] = "high"
-        errors = _validate_field_types(record["metrics"]["sk"], METRIC_STAT_FIELDS)
+        record["metrics"]["hallucination"]["mean"] = "high"
+        errors = _validate_field_types(record["metrics"]["hallucination"], METRIC_STAT_FIELDS)
         assert len(errors) > 0
 
     def test_multiple_missing_fields_fails(self) -> None:

@@ -15,17 +15,14 @@ generation:
 judge:
   primary:
     provider: "anthropic"
-    model_id: "claude-sonnet-4-5-20250929"
+    model_id: "claude-opus-4-6"
     temperature: 0.0
     max_tokens: 1024
-  fallback:
-    model: "c4ai-command-r-v01"
-    quant: "Q4_K_M"
-    hf_repo: "bartowski/c4ai-command-r-08-2024-GGUF"
-    gguf: "c4ai-command-r-08-2024-Q4_K_M.gguf"
-    port: 8081
-    ctx_len: 8192
-    temperature: 0.0
+  agreement_judges:
+    - provider: "openai"
+      model_id: "gpt-5.4"
+    - provider: "google"
+      model_id: "gemini-3-flash-preview"
 
 scoring:
   primary: ragchecker
@@ -59,3 +56,7 @@ judge_validation:
   primary_arch_sample: 50
   secondary_arch_sample: 50
   agreement_threshold_kappa: 0.80
+  judges:  # pairwise kappa computed for all pairs
+    - {provider: "anthropic", model_id: "claude-opus-4-6"}
+    - {provider: "openai", model_id: "gpt-5.4"}
+    - {provider: "google", model_id: "gemini-3-flash-preview"}

@@ -24,8 +24,9 @@ MODEL_COLORS: dict[str, str] = {
 }
 
 FRONTIER_STYLES: dict[str, str] = {
-    "gpt-4o": "#e377c2", "gpt-5": "#bcbd22",
-    "claude-3.5-sonnet": "#17becf", "gemini-2.0-flash": "#aec7e8",
+    "gpt-5.4": "#e377c2", "claude-opus-4-6": "#bcbd22",
+    "gemini-3-flash": "#17becf", "deepseek-v3.2": "#aec7e8",
+    "glm-5": "#9edae5",
 }
 
 
@@ -58,7 +59,7 @@ def _filter_local(records: list[dict[str, Any]], pass_prefix: str) -> list[dict[
 def _get_frontier(records: list[dict[str, Any]], pass_prefix: str) -> list[dict[str, Any]]:
     """Get frontier (API) model records for reference lines."""
     return [r for r in records if r["pass"].startswith(pass_prefix)
-            and r.get("source") == "frontier"]
+            and r.get("source") == "api"]
 
 
 def _draw_frontier_lines(
@@ -216,7 +217,7 @@ def plot_rgb_negative_rejection(
            and r.get("source", "local") == "local"
            and r["pass"].startswith("pass3")]
     frontier = [r for r in records if r.get("subset") == "negative_rejection"
-                and r.get("source") == "frontier"
+                and r.get("source") == "api"
                 and r["pass"].startswith("pass3")]
     series = _build_series(neg, "cu")
     fig, ax = plt.subplots(figsize=(10, 6))

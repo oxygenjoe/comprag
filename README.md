@@ -31,7 +31,7 @@ python -m comprag generate --model qwen2.5-14b-instruct --quant Q4_K_M \
     --dataset rgb --pass pass2_loose
 
 # Generate with frontier API model
-python -m comprag generate --frontier --provider openai --model gpt-5 \
+python -m comprag generate --frontier --provider openai --model gpt-5.4 \
     --dataset rgb --pass pass2_loose --seed 42
 
 # Score results with RAGChecker + RAGAS
@@ -66,7 +66,7 @@ scripts/
   build_index.py             # Build ChromaDB index from normalized JSONL
   download_models.py         # Download GGUF files from HuggingFace
   determinism_pilot.py       # Verify greedy decoding is seed-invariant
-  judge_agreement.py         # Cohen's kappa between frontier/local judges
+  judge_agreement.py         # Pairwise Cohen's kappa across 3 frontier judges
   generate_preregistration.py  # Lock experimental design before runs
 tests/
   test_schema.py       # Golden-file tests for JSONL output schema
@@ -85,7 +85,7 @@ results/
 ## Config Files
 
 - **models.yaml** -- Defines local models with HuggingFace repos and available quantization levels (Q3_K_M through FP16).
-- **frontier.yaml** -- Defines frontier API models (GPT-5, Claude Sonnet 4.5, Gemini 2.5 Flash, DeepSeek V3.2, GLM-5) with provider routing.
+- **frontier.yaml** -- Defines frontier API models (GPT-5.4, Claude Opus 4.6, Gemini 3 Flash, DeepSeek V3.2, GLM-5) with provider routing.
 - **prompts.yaml** -- Three prompt templates: pass1_baseline (no context), pass2_loose (context in user message), pass3_strict (system instruction to use only context).
 - **eval.yaml** -- Retrieval parameters (embedding model, chunk size, top-k), generation locks (temp=0, max_tokens=512), judge configuration, bootstrap stats params, dataset definitions.
 

@@ -51,6 +51,25 @@ def cmd_retrieve(args: argparse.Namespace) -> None:
         logger.info("query=%s chunks=%d", text[:60], len(chunks))
 
 
+def _load_completed_query_ids(output_path: Path) -> set[str]:
+    """Load query IDs already written to an output JSONL file for resume."""
+    done: set[str] = set()
+    if not output_path.exists():
+        return done
+    with open(output_path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    rec = json.loads(line)
+                    qid = rec.get("query_id", "")
+                    if qid:
+                        done.add(qid)
+                except json.JSONDecodeError:
+                    continue
+    return done
+
+
 def cmd_generate(args: argparse.Namespace) -> None:
     """Run generation: local llama.cpp or frontier API, write raw JSONL."""
     logging.basicConfig(level=logging.INFO)
@@ -60,6 +79,16 @@ def cmd_generate(args: argparse.Namespace) -> None:
     output_dir = PROJECT_ROOT / "results" / "raw"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{args.model}_{args.dataset}_{pass_name}.jsonl"
+
+    # Resume: skip queries already in output file.
+    done_ids = _load_completed_query_ids(output_path)
+    if done_ids:
+        total_before = len(queries)
+        queries = [q for q in queries if q.get("query_id", q.get("sample_id", q.get("id", ""))) not in done_ids]
+        logger.info("Resuming: %d/%d queries already done, %d remaining", len(done_ids), total_before, len(queries))
+    if not queries:
+        logger.info("All queries already completed in %s", output_path)
+        return
 
     if args.frontier:
         # Frontier models only run pass2_loose and pass3_strict (frontier.yaml contract)
@@ -89,22 +118,27 @@ def _run_generate_local(
     index_dir = str(PROJECT_ROOT / "index")
     need_context = pass_name != "pass1_baseline"
     retriever = Retriever(index_dir=index_dir) if need_context else None
-    collection = args.dataset
+    subset = getattr(args, "subset", None)
+    collection = f"{args.dataset}_{subset}" if subset else args.dataset
 
-    with open(output_path, "w") as out:
-        for rec in queries:
+    with open(output_path, "a") as out:
+        for i, rec in enumerate(queries):
             text = rec.get("query", rec.get("question", ""))
             context = None
             if retriever and need_context:
-                context = retriever.query(text=text, collection=collection)
+                rec_subset = rec.get("subset", subset or "default")
+                rec_collection = f"{args.dataset}_{rec_subset}" if rec_subset and rec_subset != "default" else collection
+                context = retriever.query(text=text, collection=rec_collection)
             messages = build_messages(text, context, pass_name)
-            response, time_ms = generate_local(messages)
+            response, time_ms, _model = generate_local(messages)
             record = _build_raw_record(
                 run_id, args.model, args.quant or "unknown", "local", None,
                 args.dataset, rec.get("subset", "default"), pass_name,
                 args.seed, rec, text, context, response, time_ms,
             )
             out.write(json.dumps(record) + "\n")
+            out.flush()
+            logger.info("[%d/%d] %s", i + 1, len(queries), text[:60])
 
 
 def _run_generate_frontier(
@@ -121,16 +155,19 @@ def _run_generate_frontier(
     index_dir = str(PROJECT_ROOT / "index")
     need_context = pass_name != "pass1_baseline"
     retriever = Retriever(index_dir=index_dir) if need_context else None
-    collection = args.dataset
+    subset = getattr(args, "subset", None)
+    collection = f"{args.dataset}_{subset}" if subset else args.dataset
 
-    with open(output_path, "w") as out:
-        for rec in queries:
+    with open(output_path, "a") as out:
+        for i, rec in enumerate(queries):
             text = rec.get("query", rec.get("question", ""))
             context = None
             if retriever and need_context:
-                context = retriever.query(text=text, collection=collection)
+                rec_subset = rec.get("subset", subset or "default")
+                rec_collection = f"{args.dataset}_{rec_subset}" if rec_subset and rec_subset != "default" else collection
+                context = retriever.query(text=text, collection=rec_collection)
             messages = build_messages(text, context, pass_name)
-            response, time_ms = generate_frontier(
+            response, time_ms, _model = generate_frontier(
                 messages, args.provider, args.model, seed=args.seed,
             )
             record = _build_raw_record(
@@ -139,6 +176,8 @@ def _run_generate_frontier(
                 args.seed, rec, text, context, response, time_ms,
             )
             out.write(json.dumps(record) + "\n")
+            out.flush()
+            logger.info("[%d/%d] %s", i + 1, len(queries), text[:60])
 
 
 def _build_raw_record(
@@ -159,7 +198,7 @@ def _build_raw_record(
         "subset": subset,
         "pass": pass_name,
         "seed": seed,
-        "query_id": rec.get("query_id", rec.get("id", "")),
+        "query_id": rec.get("query_id", rec.get("sample_id", rec.get("id", ""))),
         "query": query,
         "context_chunks": context,
         "ground_truth": rec.get("ground_truth", rec.get("answer", "")),
@@ -183,7 +222,8 @@ def cmd_score(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / input_path.name
 
-    judge_mode = getattr(args, "judge_mode", "frontier")
+    judge_provider = getattr(args, "judge_provider", "anthropic")
+    judge_model = getattr(args, "judge_model", "claude-opus-4-6")
     records: list[dict] = []
     with open(input_path) as f:
         for line in f:
@@ -191,20 +231,34 @@ def cmd_score(args: argparse.Namespace) -> None:
             if line:
                 records.append(json.loads(line))
 
-    with open(output_path, "w") as out:
-        for rec in records:
+    # Resume: skip already-scored records.
+    done_ids = _load_completed_query_ids(output_path)
+    if done_ids:
+        total_before = len(records)
+        records = [r for r in records if r.get("query_id", "") not in done_ids]
+        logger.info("Scoring resume: %d/%d already done, %d remaining", len(done_ids), total_before, len(records))
+    if not records:
+        logger.info("All records already scored in %s", output_path)
+        return
+
+    with open(output_path, "a") as out:
+        for i, rec in enumerate(records):
             rc = score_ragchecker(
                 rec["query"], rec["response"],
                 rec["context_chunks"] or [], rec["ground_truth"],
-                judge_mode=judge_mode,
+                judge_provider=judge_provider,
+                judge_model=judge_model,
             )
             ra = score_ragas(
                 rec["query"], rec["response"],
                 rec["context_chunks"] or [], rec["ground_truth"],
-                judge_mode=judge_mode,
+                judge_provider=judge_provider,
+                judge_model=judge_model,
             )
             rec["scores"] = {"ragchecker": rc, "ragas": ra}
             out.write(json.dumps(rec) + "\n")
+            out.flush()
+            logger.info("Scored [%d/%d] %s", i + 1, len(records), rec.get("query_id", "")[:60])
 
     logger.info("Scored %d records -> %s", len(records), output_path)
 
@@ -256,8 +310,11 @@ def _add_score_parser(sub: argparse._SubParsersAction) -> None:
     """Add score subcommand."""
     p = sub.add_parser("score", help="Score a results JSONL file")
     p.add_argument("--input", type=str, required=True, help="Path to raw results JSONL")
-    p.add_argument("--judge-mode", type=str, default="frontier",
-                   choices=["frontier", "local"], help="Judge mode")
+    p.add_argument("--judge-provider", type=str, default="anthropic",
+                   choices=["anthropic", "openai", "google"],
+                   help="Frontier API provider for judge")
+    p.add_argument("--judge-model", type=str, default="claude-opus-4-6",
+                   help="Model ID for the judge")
     p.set_defaults(func=cmd_score)
 
 

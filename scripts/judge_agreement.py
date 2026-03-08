@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Judge agreement: compare frontier vs local fallback judge.
+"""Judge agreement: frontier-vs-frontier validation across 3 API judges.
 
-Score stratified samples with both Claude Sonnet 4.5 and Command R 35B Q4_K_M.
-Compute Cohen's kappa overall and per stratum. If kappa >= 0.80, local fallback
-is validated for reproducibility use.
+Score stratified samples with Claude Opus 4.6, GPT-5.4, and Gemini 3 Flash.
+Compute pairwise Cohen's kappa for all 3 pairs. If a cheaper judge hits
+kappa >= 0.80 against Opus, document it as a validated cost-efficient alternative.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import json
 import logging
 import random
 import sys
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -72,11 +73,7 @@ def stratified_sample(
     primary_n: int,
     secondary_n: int,
 ) -> list[dict[str, Any]]:
-    """Sample records stratified by model architecture role.
-
-    Returns primary_n from primary-role models and secondary_n from
-    secondary-role models. Falls back to available count if fewer exist.
-    """
+    """Sample records stratified by model architecture role."""
     primary = [r for r in records if model_roles.get(r["model"]) == "primary"]
     secondary = [r for r in records if model_roles.get(r["model"]) == "secondary"]
 
@@ -93,17 +90,17 @@ def stratified_sample(
 
 def score_with_judge(
     record: dict[str, Any],
-    judge_mode: str,
-    judge_url: str = "http://localhost:8081",
+    judge_provider: str,
+    judge_model: str,
 ) -> dict[str, float]:
-    """Score a single record with the specified judge."""
+    """Score a single record with the specified frontier judge."""
     return score_ragchecker(
         query=record["query"],
         response=record["response"],
         context=record.get("context_chunks") or [],
         ground_truth=record["ground_truth"],
-        judge_mode=judge_mode,
-        judge_url=judge_url,
+        judge_provider=judge_provider,
+        judge_model=judge_model,
     )
 
 
@@ -141,133 +138,142 @@ def cohens_kappa(
     return (observed_agree - expected_agree) / (1.0 - expected_agree)
 
 
-def compute_agreement(
-    frontier_scores: list[dict[str, float]],
-    local_scores: list[dict[str, float]],
-    strata: list[str],
-    metric: str = "context_utilization",
-) -> dict[str, Any]:
-    """Compute Cohen's kappa overall and per stratum."""
-    f_labels = [_discretize(s[metric]) for s in frontier_scores]
-    l_labels = [_discretize(s[metric]) for s in local_scores]
-
-    overall_kappa = cohens_kappa(f_labels, l_labels)
-
-    per_stratum: dict[str, float] = {}
-    for stratum in sorted(set(strata)):
-        idx = [i for i, s in enumerate(strata) if s == stratum]
-        f_sub = [f_labels[i] for i in idx]
-        l_sub = [l_labels[i] for i in idx]
-        per_stratum[stratum] = cohens_kappa(f_sub, l_sub)
-
-    return {
-        "overall_kappa": round(overall_kappa, 4),
-        "per_stratum_kappa": {k: round(v, 4) for k, v in per_stratum.items()},
-    }
-
-
 def _score_all_samples(
     sampled: list[dict[str, Any]],
+    judges: list[dict[str, str]],
     model_roles: dict[str, str],
-    judge_url: str,
-) -> tuple[list[dict[str, float]], list[dict[str, float]], list[str]]:
-    """Score every sample with both frontier and local judges.
+) -> tuple[dict[str, list[dict[str, float]]], list[str]]:
+    """Score every sample with all frontier judges.
 
-    Returns (frontier_scores, local_scores, strata) parallel lists.
+    Returns (judge_scores, strata) where judge_scores maps
+    "provider/model" to a parallel list of score dicts.
     """
-    frontier_scores: list[dict[str, float]] = []
-    local_scores: list[dict[str, float]] = []
+    judge_scores: dict[str, list[dict[str, float]]] = {}
+    for judge in judges:
+        key = f"{judge['provider']}/{judge['model_id']}"
+        judge_scores[key] = []
+
     strata: list[str] = []
 
     for i, record in enumerate(sampled):
         role = model_roles.get(record["model"], "unknown")
-        logger.info(
-            "Scoring sample %d/%d (model=%s, role=%s)",
-            i + 1, len(sampled), record["model"], role,
-        )
-        frontier_scores.append(score_with_judge(record, "frontier"))
-        local_scores.append(score_with_judge(record, "local", judge_url))
         strata.append(role)
+        for judge in judges:
+            key = f"{judge['provider']}/{judge['model_id']}"
+            logger.info(
+                "Scoring sample %d/%d with %s (model=%s, role=%s)",
+                i + 1, len(sampled), key, record["model"], role,
+            )
+            scores = score_with_judge(record, judge["provider"], judge["model_id"])
+            judge_scores[key].append(scores)
 
-    return frontier_scores, local_scores, strata
+    return judge_scores, strata
 
 
-def _build_result(
-    agreement: dict[str, Any],
+def compute_pairwise_agreement(
+    judge_scores: dict[str, list[dict[str, float]]],
     strata: list[str],
-    threshold: float,
-) -> dict[str, Any]:
-    """Assemble the final result dict with validation status."""
-    validated = agreement["overall_kappa"] >= threshold
-    return {
-        "sample_size": len(strata),
-        "primary_arch_n": strata.count("primary"),
-        "secondary_arch_n": strata.count("secondary"),
-        "agreement_threshold_kappa": threshold,
-        "validated": validated,
-        **agreement,
-        "frontier_judge": "claude-sonnet-4-5-20250929",
-        "local_judge": "c4ai-command-r-v01-Q4_K_M",
-    }
+    metric: str = "context_utilization",
+) -> list[dict[str, Any]]:
+    """Compute pairwise Cohen's kappa for all judge pairs."""
+    judge_keys = sorted(judge_scores.keys())
+    results: list[dict[str, Any]] = []
+
+    for key_a, key_b in combinations(judge_keys, 2):
+        a_labels = [_discretize(s[metric]) for s in judge_scores[key_a]]
+        b_labels = [_discretize(s[metric]) for s in judge_scores[key_b]]
+
+        overall = cohens_kappa(a_labels, b_labels)
+
+        per_stratum: dict[str, float] = {}
+        for stratum in sorted(set(strata)):
+            idx = [i for i, s in enumerate(strata) if s == stratum]
+            a_sub = [a_labels[i] for i in idx]
+            b_sub = [b_labels[i] for i in idx]
+            per_stratum[stratum] = round(cohens_kappa(a_sub, b_sub), 4)
+
+        results.append({
+            "judge_a": key_a,
+            "judge_b": key_b,
+            "overall_kappa": round(overall, 4),
+            "per_stratum_kappa": per_stratum,
+        })
+
+    return results
 
 
 def run_agreement(
     input_path: Path,
-    sample_size: int,
     output_path: Path,
-    judge_url: str = "http://localhost:8081",
 ) -> dict[str, Any]:
-    """Run the full judge agreement pipeline.
-
-    Loads records, samples, scores with both judges, computes kappa.
-    """
+    """Run the full frontier-vs-frontier judge agreement pipeline."""
     config = load_config()
     model_roles = load_model_roles()
 
-    primary_n = config.get("primary_arch_sample", sample_size // 2)
-    secondary_n = config.get("secondary_arch_sample", sample_size // 2)
+    judges = config.get("judges", [])
+    if len(judges) < 2:
+        raise RuntimeError("Need at least 2 judges in eval.yaml judge_validation.judges")
+
+    primary_n = config.get("primary_arch_sample", 50)
+    secondary_n = config.get("secondary_arch_sample", 50)
+    threshold = config.get("agreement_threshold_kappa", 0.80)
 
     records = load_records(input_path)
     sampled = stratified_sample(records, model_roles, primary_n, secondary_n)
 
-    frontier_scores, local_scores, strata = _score_all_samples(
-        sampled, model_roles, judge_url,
-    )
-    agreement = compute_agreement(frontier_scores, local_scores, strata)
-    threshold = config.get("agreement_threshold_kappa", 0.80)
-    result = _build_result(agreement, strata, threshold)
+    judge_scores, strata = _score_all_samples(sampled, judges, model_roles)
+    pairwise = compute_pairwise_agreement(judge_scores, strata)
+
+    # Check which cheaper judges validate against primary (first in list).
+    primary_key = f"{judges[0]['provider']}/{judges[0]['model_id']}"
+    validated_alternatives: list[str] = []
+    for pair in pairwise:
+        if primary_key in (pair["judge_a"], pair["judge_b"]):
+            other = pair["judge_b"] if pair["judge_a"] == primary_key else pair["judge_a"]
+            if pair["overall_kappa"] >= threshold:
+                validated_alternatives.append(other)
+
+    result = {
+        "sample_size": len(sampled),
+        "primary_arch_n": strata.count("primary"),
+        "secondary_arch_n": strata.count("secondary"),
+        "agreement_threshold_kappa": threshold,
+        "primary_judge": primary_key,
+        "pairwise_results": pairwise,
+        "validated_alternatives": validated_alternatives,
+        "judges": [f"{j['provider']}/{j['model_id']}" for j in judges],
+    }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
         json.dump(result, f, indent=2)
     logger.info("Wrote agreement results to %s", output_path)
-    logger.info(
-        "Overall kappa=%.4f, validated=%s (threshold=%.2f)",
-        agreement["overall_kappa"], result["validated"], threshold,
-    )
+
+    for pair in pairwise:
+        logger.info(
+            "Kappa %s vs %s: %.4f",
+            pair["judge_a"], pair["judge_b"], pair["overall_kappa"],
+        )
+    if validated_alternatives:
+        logger.info("Validated alternatives (kappa >= %.2f): %s", threshold, validated_alternatives)
+    else:
+        logger.info("No alternatives met kappa >= %.2f threshold", threshold)
+
     return result
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Judge agreement validation: frontier vs local fallback.",
+        description="Judge agreement: frontier-vs-frontier pairwise kappa.",
     )
     parser.add_argument(
         "--input", type=Path, required=True,
         help="Path to scored JSONL file or directory of JSONL files.",
     )
     parser.add_argument(
-        "--sample-size", type=int, default=100,
-        help="Total sample size (default: 100).",
-    )
-    parser.add_argument(
         "--output", type=Path, default=Path("judge_agreement.json"),
         help="Output path for agreement results JSON (default: judge_agreement.json).",
-    )
-    parser.add_argument(
-        "--judge-url", type=str, default="http://localhost:8081",
-        help="Base URL for local judge server (default: http://localhost:8081).",
     )
     return parser.parse_args(argv)
 
@@ -279,12 +285,7 @@ def main(argv: list[str] | None = None) -> None:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
     args = parse_args(argv)
-    run_agreement(
-        input_path=args.input,
-        sample_size=args.sample_size,
-        output_path=args.output,
-        judge_url=args.judge_url,
-    )
+    run_agreement(input_path=args.input, output_path=args.output)
 
 
 if __name__ == "__main__":

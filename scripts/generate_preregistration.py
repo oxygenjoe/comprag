@@ -18,24 +18,27 @@ import yaml
 logger = logging.getLogger(__name__)
 
 HYPOTHESIS = (
-    "Local small models (8-14B parameters) with retrieval-augmented generation "
-    "produce higher context utilization (CU) scores than the same models without "
-    "retrieval, and approach frontier model CU at Q8_0 and FP16 quantization "
-    "levels on factoid QA tasks."
+    "There exists a quantization-dependent faithfulness curve whose shape varies "
+    "by model architecture. Aggressive quantization weakens parametric memory, "
+    "potentially increasing reliance on retrieved context (higher CU). Sufficient "
+    "quantization eventually degrades reasoning capacity, creating a faithfulness-"
+    "capability tradeoff. The central question is the shape of this curve across "
+    "model architectures."
 )
 
 PREDICTIONS = [
-    "P1: For each primary-architecture model, CU increases monotonically from "
-    "Q3_K_M to FP16 on RGB counterfactual subset (pass2_loose).",
-    "P2: At Q8_0 and above, primary-architecture models achieve CU within 0.15 "
-    "of the best frontier model on the same dataset/subset/pass.",
-    "P3: Preference_Gap (pass3_CU - pass2_CU) is negative or near-zero for "
-    "primary-architecture models at Q4_K_M and above, indicating strict prompts "
-    "do not improve over loose prompts when retrieval quality is held constant.",
-    "P4: SmolLM2 1.7B (floor model) achieves CU < 0.30 on pass2_loose, "
-    "confirming that sub-2B models lack sufficient capacity for RAG.",
-    "P5: Secondary-architecture models (Mistral NeMo, Gemma 2) at Q4_K_M "
-    "achieve CU within 0.10 of the matched primary-architecture model at Q4_K_M.",
+    "P1: Qwen 2.5 14B — CU increases monotonically from FP16 to Q3 (Gullible "
+    "pattern: quantization erodes parametric confidence, model defers to context).",
+    "P2: Llama 3.1 8B — CU increases from FP16 to Q5 but decreases from Q4 to "
+    "Q3 (inverted U). Statistical criterion: Q3 bootstrap CI upper bound below "
+    "peak point's CI lower bound.",
+    "P3: Qwen 2.5 7B — CU curve shape qualitatively matches Qwen 14B (Gullible), "
+    "controlling for size confound in the 14B-vs-8B Llama comparison.",
+    "P4: Global falsification — if no primary model demonstrates the Gullible "
+    "pattern (CU monotonically increasing with quantization), core hypothesis "
+    "is refuted.",
+    "P5: SmolLM2 1.7B (floor model) — establishes whether sub-2B models produce "
+    "meaningful CU/SK signal or collapse entirely.",
 ]
 
 STATISTICAL_CRITERIA = {

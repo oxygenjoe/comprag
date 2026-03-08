@@ -1,20 +1,20 @@
 frontier_models:
-  gpt-5:
+  gpt-5.4:
     provider: openai
-    model_id: "gpt-5"
-    display_name: "GPT-5"
+    model_id: "gpt-5.4"
+    display_name: "GPT-5.4"
     base_url: null  # default openai endpoint
 
-  claude-sonnet-4-5:
+  claude-opus-4-6:
     provider: anthropic
-    model_id: "claude-sonnet-4-5-20250929"
-    display_name: "Claude Sonnet 4.5"
+    model_id: "claude-opus-4-6"
+    display_name: "Claude Opus 4.6"
     base_url: null  # uses anthropic SDK
 
-  gemini-2.5-flash:
+  gemini-3-flash:
     provider: google
-    model_id: "gemini-2.5-flash"
-    display_name: "Gemini 2.5 Flash"
+    model_id: "gemini-3-flash-preview"
+    display_name: "Gemini 3 Flash"
     base_url: null
 
   deepseek-v3.2:

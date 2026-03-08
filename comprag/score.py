@@ -1,10 +1,8 @@
-"""Evaluation scoring: thin wrapper around RAGChecker with judge routing.
+"""Evaluation scoring: thin wrapper around RAGChecker with frontier judge routing.
 
-Supports two judge modes:
-- "frontier": Anthropic Claude Sonnet 4.5 via litellm (used by RAGChecker)
-- "local": Command R 35B Q4_K_M on llama.cpp server (port 8081)
-
-The generation server (8080) must be stopped before starting the local judge.
+Judge model: frontier API only (Claude Opus 4.6 primary). The judge_provider
+and judge_model parameters allow switching to other frontier APIs for the
+judge agreement validation check.
 """
 
 from __future__ import annotations
@@ -15,14 +13,14 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from langchain_openai import ChatOpenAI
+import openai as openai_sdk
 from ragas import EvaluationDataset, SingleTurnSample, evaluate
-from ragas.llms import LangchainLLMWrapper
+from ragas.llms import llm_factory
 from ragas.metrics.collections import (
-    answer_relevancy,
-    context_precision,
-    context_recall,
-    faithfulness,
+    AnswerRelevancy,
+    ContextPrecision,
+    ContextRecall,
+    Faithfulness,
 )
 from ragchecker import RAGChecker, RAGResult, RAGResults
 from ragchecker.container import RetrievedDoc
@@ -32,16 +30,21 @@ logger = logging.getLogger(__name__)
 # --- Constants from config/eval.yaml ---
 _DEFAULT_EVAL_PATH = Path(__file__).resolve().parent.parent / "config" / "eval.yaml"
 
-# Judge constants (locked).
-FRONTIER_JUDGE_MODEL = "claude-sonnet-4-5-20250929"
-FRONTIER_JUDGE_PROVIDER = "anthropic"
-LOCAL_JUDGE_MODEL = "c4ai-command-r-v01"
-LOCAL_JUDGE_PORT = 8081
+# Default judge (locked).
+DEFAULT_JUDGE_PROVIDER = "anthropic"
+DEFAULT_JUDGE_MODEL = "claude-opus-4-6"
 JUDGE_TEMPERATURE = 0.0
 JUDGE_MAX_TOKENS = 1024
 
-# RAGChecker metrics we care about for comprag.
-TARGET_METRICS = ["context_utilization", "self_knowledge", "noise_sensitivity_in_relevant"]
+# RAGChecker metrics — capture all 11.
+TARGET_METRICS = "all_metrics"
+
+# Provider -> litellm model prefix and API key env var.
+_JUDGE_PROVIDER_CONFIG: dict[str, dict[str, str]] = {
+    "anthropic": {"prefix": "anthropic", "env": "ANTHROPIC_API_KEY"},
+    "openai": {"prefix": "openai", "env": "OPENAI_API_KEY"},
+    "google": {"prefix": "gemini", "env": "GOOGLE_API_KEY"},
+}
 
 
 def _load_eval_config(path: Path = _DEFAULT_EVAL_PATH) -> dict[str, Any]:
@@ -50,16 +53,28 @@ def _load_eval_config(path: Path = _DEFAULT_EVAL_PATH) -> dict[str, Any]:
         return yaml.safe_load(f)
 
 
-def _build_checker_frontier() -> RAGChecker:
-    """Build RAGChecker using Anthropic Claude Sonnet 4.5 as judge.
+def _build_checker(
+    judge_provider: str = DEFAULT_JUDGE_PROVIDER,
+    judge_model: str = DEFAULT_JUDGE_MODEL,
+) -> RAGChecker:
+    """Build RAGChecker using a frontier API judge.
 
-    Requires ANTHROPIC_API_KEY environment variable.
+    Args:
+        judge_provider: One of 'anthropic', 'openai', 'google'.
+        judge_model: Model ID for the judge (e.g. 'claude-opus-4-6', 'gpt-5.4').
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise RuntimeError("Missing ANTHROPIC_API_KEY for frontier judge")
+    cfg = _JUDGE_PROVIDER_CONFIG.get(judge_provider)
+    if not cfg:
+        raise ValueError(
+            f"Unknown judge_provider '{judge_provider}'. "
+            f"Expected one of: {list(_JUDGE_PROVIDER_CONFIG.keys())}"
+        )
 
-    model_name = f"anthropic/{FRONTIER_JUDGE_MODEL}"
+    api_key = os.environ.get(cfg["env"])
+    if not api_key:
+        raise RuntimeError(f"Missing {cfg['env']} for {judge_provider} judge")
+
+    model_name = f"{cfg['prefix']}/{judge_model}"
     logger.info("Initializing frontier judge: %s", model_name)
 
     return RAGChecker(
@@ -68,35 +83,6 @@ def _build_checker_frontier() -> RAGChecker:
         batch_size_extractor=8,
         batch_size_checker=8,
     )
-
-
-def _build_checker_local(judge_url: str) -> RAGChecker:
-    """Build RAGChecker using local llama.cpp Command R server as judge.
-
-    The local server must expose an OpenAI-compatible /v1/chat/completions
-    endpoint at judge_url.
-    """
-    # For local models via OpenAI-compat API, use openai/ prefix with api_base.
-    model_name = f"openai/{LOCAL_JUDGE_MODEL}"
-    logger.info("Initializing local judge: %s at %s", model_name, judge_url)
-
-    return RAGChecker(
-        extractor_name=model_name,
-        checker_name=model_name,
-        extractor_api_base=f"{judge_url}/v1",
-        checker_api_base=f"{judge_url}/v1",
-        batch_size_extractor=4,
-        batch_size_checker=4,
-    )
-
-
-def _build_checker(judge_mode: str, judge_url: str) -> RAGChecker:
-    """Route to frontier or local judge based on mode."""
-    if judge_mode == "frontier":
-        return _build_checker_frontier()
-    if judge_mode == "local":
-        return _build_checker_local(judge_url)
-    raise ValueError(f"Unknown judge_mode '{judge_mode}'. Expected 'frontier' or 'local'.")
 
 
 def _build_rag_result(
@@ -119,12 +105,27 @@ def _build_rag_result(
     )
 
 
+# RAGChecker internal name -> spec-compliant raw record name.
+_RAGCHECKER_TO_SPEC: dict[str, str] = {
+    "precision": "overall_precision",
+    "recall": "overall_recall",
+    "f1": "overall_f1",
+    "claim_recall": "claim_recall",
+    "context_precision": "context_precision",
+    "context_utilization": "context_utilization",
+    "noise_sensitivity_in_relevant": "noise_sensitivity_relevant",
+    "noise_sensitivity_in_irrelevant": "noise_sensitivity_irrelevant",
+    "hallucination": "hallucination",
+    "self_knowledge": "self_knowledge",
+    "faithfulness": "faithfulness",
+}
+
+
 def _extract_target_metrics(result: RAGResult) -> dict[str, float]:
-    """Pull target metric values from the evaluated RAGResult."""
+    """Pull all RAGChecker metric values, mapped to spec field names."""
     return {
-        "context_utilization": result.metrics.get("context_utilization", 0.0),
-        "self_knowledge": result.metrics.get("self_knowledge", 0.0),
-        "noise_sensitivity": result.metrics.get("noise_sensitivity_in_relevant", 0.0),
+        spec_name: result.metrics.get(rc_name, 0.0)
+        for rc_name, spec_name in _RAGCHECKER_TO_SPEC.items()
     }
 
 
@@ -133,28 +134,27 @@ def score_ragchecker(
     response: str,
     context: list[str],
     ground_truth: str,
-    judge_mode: str = "frontier",
-    judge_url: str = "http://localhost:8081",
+    judge_provider: str = DEFAULT_JUDGE_PROVIDER,
+    judge_model: str = DEFAULT_JUDGE_MODEL,
 ) -> dict[str, float]:
     """Score a single RAG result using RAGChecker.
 
     Returns:
-        {"context_utilization": float, "self_knowledge": float,
-         "noise_sensitivity": float}
+        Dict with all 11 RAGChecker metrics mapped to spec field names:
+        overall_precision, overall_recall, overall_f1, claim_recall,
+        context_precision, context_utilization, self_knowledge,
+        noise_sensitivity_relevant, noise_sensitivity_irrelevant,
+        hallucination, faithfulness.
 
     Args:
-        query: The user's question.
-        response: The model's generated response.
-        context: Retrieved text chunks provided to the model.
-        ground_truth: Reference answer for evaluation.
-        judge_mode: "frontier" (Anthropic API) or "local" (Command R on llama.cpp).
-        judge_url: Base URL of local judge server (only used when judge_mode="local").
+        judge_provider: 'anthropic' | 'openai' | 'google'. Selects frontier API.
+        judge_model: Model ID for the judge API.
     """
-    checker = _build_checker(judge_mode, judge_url)
+    checker = _build_checker(judge_provider, judge_model)
     rag_result = _build_rag_result(query, response, context, ground_truth)
     results = RAGResults(results=[rag_result])
 
-    logger.info("Running RAGChecker evaluation (judge_mode=%s)", judge_mode)
+    logger.info("Running RAGChecker evaluation (judge=%s/%s)", judge_provider, judge_model)
     checker.evaluate(results, metrics=TARGET_METRICS)
 
     metrics = _extract_target_metrics(results.results[0])
@@ -162,33 +162,24 @@ def score_ragchecker(
     return metrics
 
 
-_RAGAS_METRICS = [faithfulness, answer_relevancy, context_precision, context_recall]
 _RAGAS_METRIC_NAMES = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
 
 
-def _build_ragas_llm(judge_mode: str) -> LangchainLLMWrapper:
-    """Build a RAGAS-compatible LLM wrapper routed by judge mode."""
-    if judge_mode == "frontier":
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise RuntimeError("Missing ANTHROPIC_API_KEY for frontier judge")
-        llm = ChatOpenAI(
-            model=f"anthropic/{FRONTIER_JUDGE_MODEL}",
-            api_key=api_key,
-            temperature=JUDGE_TEMPERATURE,
-            max_tokens=JUDGE_MAX_TOKENS,
-        )
-        return LangchainLLMWrapper(llm)
-    if judge_mode == "local":
-        llm = ChatOpenAI(
-            model=LOCAL_JUDGE_MODEL,
-            base_url=f"http://localhost:{LOCAL_JUDGE_PORT}/v1",
-            api_key="not-needed",
-            temperature=JUDGE_TEMPERATURE,
-            max_tokens=JUDGE_MAX_TOKENS,
-        )
-        return LangchainLLMWrapper(llm)
-    raise ValueError(f"Unknown judge_mode '{judge_mode}'. Expected 'frontier' or 'local'.")
+def _build_ragas_llm(
+    judge_provider: str = DEFAULT_JUDGE_PROVIDER,
+    judge_model: str = DEFAULT_JUDGE_MODEL,
+):
+    """Build a RAGAS-compatible LLM routed by judge provider."""
+    cfg = _JUDGE_PROVIDER_CONFIG.get(judge_provider)
+    if not cfg:
+        raise ValueError(f"Unknown judge_provider '{judge_provider}'")
+
+    api_key = os.environ.get(cfg["env"])
+    if not api_key:
+        raise RuntimeError(f"Missing {cfg['env']} for {judge_provider} judge")
+
+    model_name = f"{cfg['prefix']}/{judge_model}"
+    return llm_factory(model_name)
 
 
 def _build_ragas_sample(
@@ -208,7 +199,8 @@ def score_ragas(
     response: str,
     context: list[str],
     ground_truth: str,
-    judge_mode: str = "frontier",
+    judge_provider: str = DEFAULT_JUDGE_PROVIDER,
+    judge_model: str = DEFAULT_JUDGE_MODEL,
 ) -> dict[str, float]:
     """Score a single RAG result using RAGAS metrics.
 
@@ -217,18 +209,21 @@ def score_ragas(
          "context_precision": float, "context_recall": float}
 
     Args:
-        query: The user's question.
-        response: The model's generated response.
-        context: Retrieved text chunks provided to the model.
-        ground_truth: Reference answer for evaluation.
-        judge_mode: "frontier" (Anthropic API) or "local" (Command R on llama.cpp).
+        judge_provider: 'anthropic' | 'openai' | 'google'.
+        judge_model: Model ID for the judge API.
     """
-    llm = _build_ragas_llm(judge_mode)
+    llm = _build_ragas_llm(judge_provider, judge_model)
+    metrics = [
+        Faithfulness(llm=llm),
+        AnswerRelevancy(llm=llm),
+        ContextPrecision(llm=llm),
+        ContextRecall(llm=llm),
+    ]
     sample = _build_ragas_sample(query, response, context, ground_truth)
     dataset = EvaluationDataset(samples=[sample])
 
-    logger.info("Running RAGAS evaluation (judge_mode=%s)", judge_mode)
-    result = evaluate(dataset=dataset, metrics=_RAGAS_METRICS, llm=llm)
+    logger.info("Running RAGAS evaluation (judge=%s/%s)", judge_provider, judge_model)
+    result = evaluate(dataset=dataset, metrics=metrics)
 
     scores = {name: float(result.scores[0].get(name, 0.0)) for name in _RAGAS_METRIC_NAMES}
     logger.info("RAGAS scores: %s", scores)

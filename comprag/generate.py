@@ -87,8 +87,8 @@ def build_messages(
 def generate_local(
     messages: list[dict],
     server_url: str = "http://localhost:8080",
-) -> tuple[str, int]:
-    """POST to /v1/chat/completions. Returns (response_text, time_ms).
+) -> tuple[str, int, str]:
+    """POST to /v1/chat/completions. Returns (response_text, time_ms, response_model).
 
     Locked: temperature=0.0, max_tokens=512, seed=42.
 
@@ -97,7 +97,7 @@ def generate_local(
         server_url: Base URL of the llama.cpp server.
 
     Returns:
-        Tuple of (generated text, wall-clock milliseconds).
+        Tuple of (generated text, wall-clock milliseconds, model ID from response).
     """
     payload = json.dumps({
         "messages": messages,
@@ -119,8 +119,9 @@ def generate_local(
     time_ms = int((time.monotonic() - t0) * 1000)
 
     text = body["choices"][0]["message"]["content"]
-    logger.debug("generate_local: %d tokens in %d ms", len(text.split()), time_ms)
-    return text, time_ms
+    response_model = body.get("model", "")
+    logger.debug("generate_local: %d tokens in %d ms, model=%s", len(text.split()), time_ms, response_model)
+    return text, time_ms, response_model
 
 
 # --- Provider-specific API key env var mapping ---
@@ -152,8 +153,8 @@ def _get_api_key(provider: str) -> str:
 
 def _call_openai_compat(
     messages: list[dict], model_id: str, provider: str, seed: int,
-) -> tuple[str, int]:
-    """Call OpenAI-compatible API (openai/deepseek/zhipu/google). Returns (text, time_ms)."""
+) -> tuple[str, int, str]:
+    """Call OpenAI-compatible API (openai/deepseek/zhipu/google). Returns (text, time_ms, response_model)."""
     api_key = _get_api_key(provider)
     base_url = _PROVIDER_BASE_URLS.get(provider)
     kwargs: dict[str, Any] = {"api_key": api_key}
@@ -172,8 +173,11 @@ def _call_openai_compat(
     time_ms = int((time.monotonic() - t0) * 1000)
 
     text = resp.choices[0].message.content
-    logger.debug("generate_frontier[%s]: %d ms", provider, time_ms)
-    return text, time_ms
+    response_model = resp.model or model_id
+    if response_model != model_id:
+        logger.warning("Model mismatch: requested=%s actual=%s", model_id, response_model)
+    logger.debug("generate_frontier[%s]: %d ms, model=%s", provider, time_ms, response_model)
+    return text, time_ms, response_model
 
 
 def _extract_system_and_messages(
@@ -192,8 +196,8 @@ def _extract_system_and_messages(
 
 def _call_anthropic(
     messages: list[dict], model_id: str,
-) -> tuple[str, int]:
-    """Call Anthropic API. Returns (text, time_ms).
+) -> tuple[str, int, str]:
+    """Call Anthropic API. Returns (text, time_ms, response_model).
 
     NOTE: Anthropic does not support seed-based reproducibility.
     Variance across runs is captured in bootstrap CIs.
@@ -216,14 +220,17 @@ def _call_anthropic(
     time_ms = int((time.monotonic() - t0) * 1000)
 
     text = resp.content[0].text
-    logger.debug("generate_frontier[anthropic]: %d ms", time_ms)
-    return text, time_ms
+    response_model = resp.model or model_id
+    if response_model != model_id:
+        logger.warning("Model mismatch: requested=%s actual=%s", model_id, response_model)
+    logger.debug("generate_frontier[anthropic]: %d ms, model=%s", time_ms, response_model)
+    return text, time_ms, response_model
 
 
 def generate_frontier(
     messages: list[dict], provider: str, model_id: str, seed: int = 42,
-) -> tuple[str, int]:
-    """Call frontier API. Returns (response_text, time_ms).
+) -> tuple[str, int, str]:
+    """Call frontier API. Returns (response_text, time_ms, response_model).
 
     Provider routing:
     - openai/deepseek/zhipu: openai SDK with base_url override
@@ -232,6 +239,8 @@ def generate_frontier(
 
     Locked: temperature=0.0, max_tokens=512. Seed passed where supported.
     API keys read from environment variables.
+    The response_model field logs what the API actually served — catches
+    silent model aliasing by providers.
     """
     if provider == "anthropic":
         return _call_anthropic(messages, model_id)

@@ -10,7 +10,7 @@ models:
       Q5_K_M: "Qwen2.5-14B-Instruct-Q5_K_M.gguf"
       Q6_K:   "Qwen2.5-14B-Instruct-Q6_K.gguf"
       Q8_0:   "Qwen2.5-14B-Instruct-Q8_0.gguf"
-      FP16:   "Qwen2.5-14B-Instruct-f16.gguf"
+      FP16:   "qwen2.5-14b-instruct-fp16.gguf"  # from Qwen/Qwen2.5-14B-Instruct-GGUF (official repo)
 
   phi-4-14b:
     display_name: "Phi-4 14B"
