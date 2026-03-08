@@ -210,7 +210,7 @@ def _build_raw_record(
 
 def cmd_score(args: argparse.Namespace) -> None:
     """Score each record in a raw JSONL file, write scored JSONL."""
-    from comprag.score import score_ragchecker, score_ragas
+    from comprag.score import score_ragchecker
 
     logging.basicConfig(level=logging.INFO)
     input_path = Path(args.input)
@@ -249,13 +249,7 @@ def cmd_score(args: argparse.Namespace) -> None:
                 judge_provider=judge_provider,
                 judge_model=judge_model,
             )
-            ra = score_ragas(
-                rec["query"], rec["response"],
-                rec["context_chunks"] or [], rec["ground_truth"],
-                judge_provider=judge_provider,
-                judge_model=judge_model,
-            )
-            rec["scores"] = {"ragchecker": rc, "ragas": ra}
+            rec["scores"] = {"ragchecker": rc, "ragas": None}
             out.write(json.dumps(rec) + "\n")
             out.flush()
             logger.info("Scored [%d/%d] %s", i + 1, len(records), rec.get("query_id", "")[:60])
@@ -311,7 +305,7 @@ def _add_score_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("score", help="Score a results JSONL file")
     p.add_argument("--input", type=str, required=True, help="Path to raw results JSONL")
     p.add_argument("--judge-provider", type=str, default="anthropic",
-                   choices=["anthropic", "openai", "google"],
+                   choices=["anthropic", "openai", "google", "deepseek"],
                    help="Frontier API provider for judge")
     p.add_argument("--judge-model", type=str, default="claude-opus-4-6",
                    help="Model ID for the judge")

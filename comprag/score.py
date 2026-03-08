@@ -44,6 +44,8 @@ _JUDGE_PROVIDER_CONFIG: dict[str, dict[str, str]] = {
     "anthropic": {"prefix": "anthropic", "env": "ANTHROPIC_API_KEY"},
     "openai": {"prefix": "openai", "env": "OPENAI_API_KEY"},
     "google": {"prefix": "gemini", "env": "GOOGLE_API_KEY"},
+    "deepseek": {"prefix": "deepseek", "env": "DEEPSEEK_API_KEY",
+                 "base_url": "https://api.deepseek.com/v1"},
 }
 
 
@@ -179,7 +181,12 @@ def _build_ragas_llm(
         raise RuntimeError(f"Missing {cfg['env']} for {judge_provider} judge")
 
     model_name = f"{cfg['prefix']}/{judge_model}"
-    return llm_factory(model_name)
+    base_url = cfg.get("base_url")
+    kwargs: dict[str, Any] = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+    client = openai_sdk.OpenAI(**kwargs)
+    return llm_factory(model_name, client=client)
 
 
 def _build_ragas_sample(
