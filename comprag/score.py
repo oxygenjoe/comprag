@@ -48,6 +48,8 @@ _JUDGE_PROVIDER_CONFIG: dict[str, dict[str, str]] = {
                  "base_url": "https://api.deepseek.com/v1"},
     "zhipu": {"prefix": "openai", "env": "ZHIPU_API_KEY",
               "base_url": "https://open.bigmodel.cn/api/paas/v4"},
+    "local": {"prefix": "openai", "env": "_LOCAL_JUDGE",
+              "base_url": "http://localhost:8080/v1"},
 }
 
 
@@ -74,12 +76,20 @@ def _build_checker(
             f"Expected one of: {list(_JUDGE_PROVIDER_CONFIG.keys())}"
         )
 
-    api_key = os.environ.get(cfg["env"])
-    if not api_key:
-        raise RuntimeError(f"Missing {cfg['env']} for {judge_provider} judge")
+    if judge_provider == "local":
+        # Local llama-server: set litellm env vars for OpenAI-compat endpoint
+        os.environ["OPENAI_API_KEY"] = "not-needed"
+        os.environ["OPENAI_API_BASE"] = cfg["base_url"]
+        model_name = f"openai/{judge_model}"
+    else:
+        api_key = os.environ.get(cfg["env"])
+        if not api_key:
+            raise RuntimeError(f"Missing {cfg['env']} for {judge_provider} judge")
+        if "base_url" in cfg:
+            os.environ["OPENAI_API_BASE"] = cfg["base_url"]
+        model_name = f"{cfg['prefix']}/{judge_model}"
 
-    model_name = f"{cfg['prefix']}/{judge_model}"
-    logger.info("Initializing frontier judge: %s", model_name)
+    logger.info("Initializing judge: %s", model_name)
 
     return RAGChecker(
         extractor_name=model_name,

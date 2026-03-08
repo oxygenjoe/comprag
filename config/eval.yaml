@@ -40,16 +40,8 @@ datasets:
     pass_policy:
       counterfactual: [pass1_baseline, pass2_loose, pass3_strict]
       default: [pass2_loose]
-  nq:
-    source: "huggingface:nq_open"
-    subsets: [default]
-    pass_policy:
-      default: [pass2_loose]
-  halueval:
-    source: "https://github.com/RUCAIBox/HaluEval"
-    subsets: [default]
-    pass_policy:
-      default: [pass2_loose]
+  # nq and halueval dropped — RGB alone provides sufficient signal
+  # for the quantization-vs-faithfulness hypothesis.
 
 judge_validation:
   sample_size: 100
