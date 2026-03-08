@@ -4,6 +4,7 @@ Starts, monitors, and stops a llama-server subprocess with locked parameters.
 """
 
 import logging
+import os
 import signal
 import subprocess
 import time
@@ -21,6 +22,10 @@ TEMPERATURE = 0.0
 
 # Server binary name.
 LLAMA_SERVER_BIN = "llama-server"
+
+# V100 is CUDA device 0 but nvidia-smi device 1 on this box.
+# Pin all llama-server subprocesses to the V100 only.
+V100_CUDA_DEVICE = "0"
 
 # Health poll interval in seconds.
 HEALTH_POLL_INTERVAL = 1.0
@@ -73,11 +78,15 @@ class LlamaCppServer:
 
         logger.info("Starting llama-server: %s", " ".join(cmd))
 
+        env = os.environ.copy()
+        env["CUDA_VISIBLE_DEVICES"] = V100_CUDA_DEVICE
+
         try:
             self.proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=env,
             )
         except FileNotFoundError:
             raise LlamaCppServerError(

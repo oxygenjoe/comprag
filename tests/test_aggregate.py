@@ -19,9 +19,17 @@ def _make_record(query_id: str, cu: float) -> dict:
         "query_id": query_id,
         "scores": {
             "ragchecker": {
+                "overall_precision": 0.7,
+                "overall_recall": 0.6,
+                "overall_f1": 0.65,
+                "claim_recall": 0.8,
+                "context_precision": 0.6,
                 "context_utilization": cu,
                 "self_knowledge": 0.1,
-                "noise_sensitivity": 0.05,
+                "noise_sensitivity_relevant": 0.05,
+                "noise_sensitivity_irrelevant": 0.02,
+                "hallucination": 0.03,
+                "faithfulness": 0.9,
             }
         },
     }

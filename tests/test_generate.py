@@ -186,7 +186,7 @@ class TestGenerateLocal:
     @patch("comprag.generate.urllib.request.urlopen")
     def test_returns_text_and_time(self, mock_urlopen: MagicMock) -> None:
         mock_urlopen.return_value = _make_urlopen_response("hello world")
-        text, time_ms = generate_local([{"role": "user", "content": "hi"}])
+        text, time_ms, response_model = generate_local([{"role": "user", "content": "hi"}])
         assert text == "hello world"
         assert isinstance(time_ms, int)
         assert time_ms >= 0
@@ -231,13 +231,15 @@ class TestGenerateFrontierAnthropic:
         mock_anthropic_cls.return_value = mock_client
         mock_resp = MagicMock()
         mock_resp.content = [MagicMock(text="anthropic answer")]
+        mock_resp.model = "claude-sonnet-4-20250514"
         mock_client.messages.create.return_value = mock_resp
 
-        text, time_ms = generate_frontier(
+        text, time_ms, response_model = generate_frontier(
             [{"role": "user", "content": "q"}], "anthropic", "claude-sonnet-4-20250514",
         )
         assert text == "anthropic answer"
         assert isinstance(time_ms, int)
+        assert response_model == "claude-sonnet-4-20250514"
 
     @patch("comprag.generate._get_api_key", return_value="sk-test-key")
     @patch("comprag.generate.anthropic.Anthropic")
@@ -305,13 +307,15 @@ class TestGenerateFrontierOpenAI:
         mock_openai_cls.return_value = mock_client
         mock_resp = MagicMock()
         mock_resp.choices = [MagicMock(message=MagicMock(content="openai answer"))]
+        mock_resp.model = "gpt-4o"
         mock_client.chat.completions.create.return_value = mock_resp
 
-        text, time_ms = generate_frontier(
+        text, time_ms, response_model = generate_frontier(
             [{"role": "user", "content": "q"}], "openai", "gpt-4o",
         )
         assert text == "openai answer"
         assert isinstance(time_ms, int)
+        assert response_model == "gpt-4o"
 
     @patch("comprag.generate._get_api_key", return_value="sk-test-key")
     @patch("comprag.generate.openai.OpenAI")
