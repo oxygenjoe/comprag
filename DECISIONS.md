@@ -35,3 +35,19 @@ CU and faithfulness (the thesis's primary metrics) both clear the 0.80 κ thresh
 κ>0.93 on CU/faithfulness means switching judges does not meaningfully change results.
 Weaker agreement on NS_relevant (κ=0.29) is acceptable — that metric is secondary and both judges
 produce near-zero values anyway (552/600 raw agreement despite low κ due to marginal distribution skew).
+
+## 2026-03-08 — Sonnet 4.6 for validation pass (not Opus)
+
+**Decision:** Use Claude Sonnet 4.6 instead of Opus 4.6 for the 100-record validation sample.
+**Rationale:** Sonnet is significantly cheaper, still frontier-class. Validation pass is for
+thesis appendix agreement reporting, not primary scoring. Command R is the workhorse judge.
+
+## 2026-03-08 — RGB sampled to 100 queries per subset, NQ/HaluEval dropped
+
+**Decision:** Sample noise_robustness and negative_rejection from 300→100 (seed=42).
+Counterfactual already 100. Total 300 unique queries, 500 inference calls per model
+(counterfactual gets 3 passes, others get pass2_loose only). NQ and HaluEval dropped entirely.
+**Rationale:** 100 records per group is sufficient for bootstrap CIs. RGB alone provides
+the signal needed for the quantization-vs-faithfulness hypothesis. NQ (3.6k) and HaluEval (10k)
+would add ~8 days of runtime for secondary validation that doesn't change the core analysis.
+Full run: 30 combos × 500 queries = 15,000 inference + 15,000 scoring ≈ 27h.
