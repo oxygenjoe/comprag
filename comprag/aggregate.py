@@ -1,7 +1,7 @@
 """Bootstrap statistics and Preference_Gap computation for CompRAG.
 
 Reads scored JSONL, groups by (model, quantization, dataset, subset, pass),
-bootstraps CU/SK/NS/Preference_Gap, flags capability-degraded configs.
+bootstraps all RAGChecker metrics + Preference_Gap, flags capability-degraded configs.
 """
 
 import json
@@ -16,6 +16,21 @@ logger = logging.getLogger(__name__)
 CAPABILITY_DEGRADATION_THRESHOLD = 0.30
 BOOTSTRAP_RESAMPLES = 1000
 CONFIDENCE_LEVEL = 0.95
+
+# Raw record RAGChecker field name -> aggregated short name (spec contract).
+_RAW_TO_AGG: dict[str, str] = {
+    "overall_precision": "overall_precision",
+    "overall_recall": "overall_recall",
+    "overall_f1": "overall_f1",
+    "claim_recall": "claim_recall",
+    "context_precision": "context_precision",
+    "context_utilization": "cu",
+    "self_knowledge": "sk",
+    "noise_sensitivity_relevant": "ns_relevant",
+    "noise_sensitivity_irrelevant": "ns_irrelevant",
+    "hallucination": "hallucination",
+    "faithfulness": "faithfulness",
+}
 
 
 def bootstrap_ci(
@@ -96,7 +111,7 @@ def _group_key(record: dict) -> tuple[str, str, str, str, str]:
     )
 
 
-def aggregate_results(scored_dir: str) -> list[dict]:
+def aggregate_results(scored_dir: str, output_dir: str | None = None) -> list[dict]:
     """Group by (model, quant, dataset, subset, pass).
 
     Bootstrap CU/SK/NS/Preference_Gap.
@@ -132,18 +147,11 @@ def aggregate_results(scored_dir: str) -> list[dict]:
         model, quant, dataset, subset, pass_name = key
         group_records = groups[key]
 
-        cu_vals = [r["scores"]["ragchecker"]["context_utilization"]
-                   for r in group_records]
-        sk_vals = [r["scores"]["ragchecker"]["self_knowledge"]
-                   for r in group_records]
-        ns_vals = [r["scores"]["ragchecker"]["noise_sensitivity"]
-                   for r in group_records]
-
-        metrics = {
-            "cu": _bootstrap_metric(cu_vals),
-            "sk": _bootstrap_metric(sk_vals),
-            "ns": _bootstrap_metric(ns_vals),
-        }
+        metrics = {}
+        for raw_key, agg_key in _RAW_TO_AGG.items():
+            vals = [r["scores"]["ragchecker"].get(raw_key, 0.0)
+                    for r in group_records]
+            metrics[agg_key] = _bootstrap_metric(vals)
 
         # Preference gap: only for pass3, needs matching pass2
         base_key = (model, quant, dataset, subset)
@@ -178,9 +186,9 @@ def aggregate_results(scored_dir: str) -> list[dict]:
         results.append(result)
 
     # Write aggregated JSONL
-    output_dir = scored_path.parent / "aggregated"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / "aggregated.jsonl"
+    out = Path(output_dir) if output_dir else scored_path.parent / "aggregated"
+    out.mkdir(parents=True, exist_ok=True)
+    output_file = out / "aggregated.jsonl"
 
     with open(output_file, "w") as f:
         for result in results:

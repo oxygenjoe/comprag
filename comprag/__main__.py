@@ -262,7 +262,7 @@ def cmd_aggregate(args: argparse.Namespace) -> None:
     from comprag.aggregate import aggregate_results
 
     logging.basicConfig(level=logging.INFO)
-    results = aggregate_results(args.input_dir)
+    results = aggregate_results(args.input_dir, args.output_dir)
     logger.info("Aggregated %d groups", len(results))
 
 

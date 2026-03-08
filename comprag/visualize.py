@@ -34,7 +34,7 @@ def load_aggregated(input_dir: str) -> list[dict[str, Any]]:
     """Load all aggregated JSONL files from a directory."""
     path = Path(input_dir)
     records: list[dict[str, Any]] = []
-    for jsonl_file in sorted(path.glob("*.jsonl")):
+    for jsonl_file in sorted(path.glob("aggregated*.jsonl")):
         with open(jsonl_file) as f:
             for line in f:
                 line = line.strip()
