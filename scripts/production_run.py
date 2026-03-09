@@ -188,7 +188,7 @@ def run_scoring(raw_paths: list[Path]) -> None:
     import os
     os.environ["_LOCAL_JUDGE"] = "not-needed"
 
-    with LlamaCppServer(COMMANDR_GGUF, port=PORT) as srv:
+    with LlamaCppServer(COMMANDR_GGUF, port=5742) as srv:
         for raw_path in sorted(raw_paths):
             if not raw_path.exists():
                 continue
@@ -223,7 +223,7 @@ def run_scoring(raw_paths: list[Path]) -> None:
                             "noise_sensitivity_relevant", "noise_sensitivity_irrelevant",
                             "hallucination", "self_knowledge", "faithfulness"]}
 
-                    rec["scores"] = {"ragchecker": rc, "ragas": None}
+                    rec["scores"] = {"ragchecker": rc}
                     out.write(json.dumps(rec) + "\n")
                     out.flush()
                     if (i + 1) % 10 == 0 or i + 1 == len(remaining):
