@@ -34,7 +34,7 @@ TARGET_METRICS = "all_metrics"
 _JUDGE_PROVIDER_CONFIG: dict[str, dict[str, str]] = {
     "anthropic": {"prefix": "anthropic", "env": "ANTHROPIC_API_KEY"},
     "local": {"prefix": "openai", "env": "_LOCAL_JUDGE",
-              "base_url": "http://localhost:8080/v1"},
+              "base_url": "http://localhost:8081/v1"},
 }
 
 
