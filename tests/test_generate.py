@@ -208,7 +208,7 @@ class TestGenerateLocal:
     @patch("comprag.generate.urllib.request.urlopen")
     def test_url_construction(self, mock_urlopen: MagicMock) -> None:
         mock_urlopen.return_value = _make_urlopen_response("ok")
-        generate_local([{"role": "user", "content": "x"}], server_url="http://box:8080")
+        generate_local([{"role": "user", "content": "x"}], server_url="http://box:5741")
 
         req_obj = mock_urlopen.call_args[0][0]
-        assert req_obj.full_url == "http://box:8080/v1/chat/completions"
+        assert req_obj.full_url == "http://box:5741/v1/chat/completions"

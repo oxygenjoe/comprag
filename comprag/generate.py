@@ -83,7 +83,7 @@ def build_messages(
 
 def generate_local(
     messages: list[dict],
-    server_url: str = "http://localhost:8080",
+    server_url: str = "http://localhost:5741",
 ) -> tuple[str, int, str]:
     """POST to /v1/chat/completions. Returns (response_text, time_ms, response_model).
 

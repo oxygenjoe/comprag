@@ -62,7 +62,7 @@ DATASET = "rgb"
 SUBSET = "counterfactual_robustness"
 PASS = "pass2_loose"
 LIMIT = 100
-PORT = 8080
+PORT = 5741
 
 
 def load_queries() -> list[dict]:

@@ -40,12 +40,12 @@ class LlamaCppServer:
 
     Usage::
 
-        with LlamaCppServer("/path/to/model.gguf", port=8080) as srv:
-            # server is ready, POST to http://localhost:8080/v1/chat/completions
+        with LlamaCppServer("/path/to/model.gguf", port=5741) as srv:
+            # server is ready, POST to http://localhost:5741/v1/chat/completions
             ...
     """
 
-    def __init__(self, model_path: str, port: int = 8080) -> None:
+    def __init__(self, model_path: str, port: int = 5741) -> None:
         self.model_path = model_path
         self.port = port
         self.proc: Optional[subprocess.Popen] = None

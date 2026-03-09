@@ -33,7 +33,7 @@ PASSES = ["pass1_baseline", "pass3_strict"]
 DATASET = "rgb"
 SUBSET = "counterfactual_robustness"
 LIMIT = 500
-PORT = 8080
+PORT = 5741
 
 
 def load_queries():

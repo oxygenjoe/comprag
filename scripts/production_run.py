@@ -41,7 +41,7 @@ RESULTS_SCORED.mkdir(parents=True, exist_ok=True)
 
 SAMPLED_DIR = PROJECT_ROOT / "datasets" / "rgb" / "sampled"
 
-PORT = 8080
+PORT = 5741
 COMMANDR_GGUF = str(MODELS_DIR_1 / "c4ai-command-r-08-2024-Q4_K_M.gguf")
 
 # All 30 model/quant combos

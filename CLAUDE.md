@@ -11,7 +11,7 @@ Benchmarking study measuring how GGUF quantization levels affect RAG faithfulnes
 - CUDA device order ≠ nvidia-smi order. nvidia-smi GPU 0 = 1660 Super (dead), GPU 1 = V100. But CUDA sees V100 as device 0.
 - To run llama.cpp on V100: `CUDA_VISIBLE_DEVICES=0 llama-server ...` (NOT `--main-gpu 1`)
 - Do NOT use `--main-gpu` — use `CUDA_VISIBLE_DEVICES` to isolate the correct GPU
-- Generation server: port 8080. Judge server: port 8081. Cannot coexist on V100.
+- Generation server: port 5741. Judge server: port 5742. Cannot coexist on V100.
 
 ## Locked Parameters
 - temperature=0.0, seed=42 on ALL runs, no exceptions
@@ -22,7 +22,7 @@ Benchmarking study measuring how GGUF quantization levels affect RAG faithfulnes
 - 500 queries per model (100 per RGB subset)
 
 ## Judge Architecture (v9)
-- Primary judge: Command R 35B Q4_K_M (local, llama.cpp on port 8081)
+- Primary judge: Command R 35B Q4_K_M (local, llama.cpp on port 5742)
 - Validation judge: Claude Sonnet 4.6 API (100-record spot-check for appendix)
 - No frontier generation — all generation is local via llama.cpp
 - Judge validation: Cohen's κ between Command R and Sonnet 4.6 on 100 records

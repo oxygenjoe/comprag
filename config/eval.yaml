@@ -10,7 +10,7 @@ generation:
   temperature: 0.0
   max_tokens: 512
   seed: 42
-  local_server_port: 8080
+  local_server_port: 5741
 
 judge:
   primary:
@@ -45,5 +45,5 @@ datasets:
 judge_validation:
   sample_size: 500  # stratified across model matrix, run after production scoring
   agreement_threshold_kappa: 0.80  # required for CU; secondary metrics report raw agreement alongside kappa
-  primary_judge: {provider: "local", model: "c4ai-command-r-v01", quant: "Q4_K_M", port: 8081}
+  primary_judge: {provider: "local", model: "c4ai-command-r-v01", quant: "Q4_K_M", port: 5742}
   validation_judge: {provider: "anthropic", model_id: "claude-sonnet-4-6"}

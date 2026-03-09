@@ -151,7 +151,7 @@ All models in GGUF format via llama.cpp. All models are established architecture
 
 **Derived metric:** Preference_Gap = Pass3_CU − Pass2_CU. Separates behavioral preference from capability. Reported for all configurations with visual flagging (not exclusion) of capability-degraded configurations.
 
-**Judge model:** Command R 35B Q4_K_M (local, running on V100 via llama.cpp server on port 8081) is the primary bulk judge for all scoring runs. The judge is instrumentation, not an experimental variable — Command R shares no architecture or training data with any model in the test matrix, eliminating self-evaluation bias. The generation server (port 8080) must be stopped before starting the judge server — they cannot coexist on the V100.
+**Judge model:** Command R 35B Q4_K_M (local, running on V100 via llama.cpp server on port 5742) is the primary bulk judge for all scoring runs. The judge is instrumentation, not an experimental variable — Command R shares no architecture or training data with any model in the test matrix, eliminating self-evaluation bias. The generation server (port 5741) must be stopped before starting the judge server — they cannot coexist on the V100.
 
 **Judge validation:** Claude Sonnet 4.6 (API) scores a 500-record validation sample stratified across the model matrix as an appendix validation. Cohen's κ between Command R and Sonnet 4.6 is reported per metric. For the primary analysis metric (CU), κ ≥ 0.80 is required. For secondary metrics where both judges produce near-zero scores (e.g., hallucination, SK), κ is expected to be deflated by marginal distribution skew; raw agreement rates are reported alongside κ to contextualize these cases. DeepSeek test pass during development confirmed Command R produces sufficient judge quality.
 
@@ -192,8 +192,8 @@ Single platform: NVIDIA V100 SXM2 32GB (via SXM2-to-PCIe adapter) in an x99 mATX
 
 ### Tech Stack
 
-- **Inference (generation):** llama.cpp server (GGUF models, OpenAI-compatible HTTP API, port 8080)
-- **Inference (judge):** llama.cpp server (Command R 35B Q4_K_M, port 8081) — cannot coexist with generation server on V100
+- **Inference (generation):** llama.cpp server (GGUF models, OpenAI-compatible HTTP API, port 5741)
+- **Inference (judge):** llama.cpp server (Command R 35B Q4_K_M, port 5742) — cannot coexist with generation server on V100
 - **Vector store:** ChromaDB (local, file-based)
 - **Embeddings:** all-MiniLM-L6-v2 (sentence-transformers, CPU)
 - **Evaluation:** RAGChecker (version pinned)

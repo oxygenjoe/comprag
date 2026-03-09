@@ -1,6 +1,6 @@
 """Evaluation scoring: thin wrapper around RAGChecker with local judge.
 
-Judge model: Command R 35B Q4_K_M (local, llama-server on port 8081).
+Judge model: Command R 35B Q4_K_M (local, llama-server on port 5742).
 The judge_provider and judge_model parameters allow switching to Anthropic
 API for the judge agreement validation check.
 """
@@ -34,7 +34,7 @@ TARGET_METRICS = "all_metrics"
 _JUDGE_PROVIDER_CONFIG: dict[str, dict[str, str]] = {
     "anthropic": {"prefix": "anthropic", "env": "ANTHROPIC_API_KEY"},
     "local": {"prefix": "openai", "env": "_LOCAL_JUDGE",
-              "base_url": "http://localhost:8081/v1"},
+              "base_url": "http://localhost:5742/v1"},
 }
 
 

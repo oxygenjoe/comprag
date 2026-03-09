@@ -17,9 +17,9 @@ dataset (RGB — counterfactual, noise_robustness, negative_rejection)
     ↓
 retriever (ChromaDB + MiniLM embeddings, held constant)
     ↓
-generator (llama.cpp server, port 8080)
+generator (llama.cpp server, port 5741)
     ↓
-scorer (RAGChecker — judge on llama.cpp port 8081)
+scorer (RAGChecker — judge on llama.cpp port 5742)
     ↓
 aggregator (bootstrap CIs, Preference_Gap)
     ↓
@@ -28,7 +28,7 @@ visualizer (matplotlib curves)
 
 Every step reads from and writes to JSONL files. No in-memory pipeline coupling. Each step is independently re-runnable.
 
-**Critical constraint:** Generation server (port 8080) and judge server (port 8081) cannot coexist on the V100. Generate all outputs first, stop the generation server, then start the judge server for scoring.
+**Critical constraint:** Generation server (port 5741) and judge server (port 5742) cannot coexist on the V100. Generate all outputs first, stop the generation server, then start the judge server for scoring.
 
 ---
 
@@ -173,7 +173,7 @@ No `runner.py` mega-module. Each file does one thing.
 
 ```python
 class LlamaCppServer:
-    def __init__(self, model_path: str, port: int = 8080):
+    def __init__(self, model_path: str, port: int = 5741):
         self.proc = None
     
     def start(self, ctx_len: int = 4096) -> None:
@@ -224,7 +224,7 @@ def build_messages(query: str, context: list[str] | None, pass_name: str) -> lis
     NO manual chat template tokens. The server handles wrapping.
     """
 
-def generate_local(messages: list[dict], server_url: str = "http://localhost:8080") -> tuple[str, int]:
+def generate_local(messages: list[dict], server_url: str = "http://localhost:5741") -> tuple[str, int]:
     """POST to /v1/chat/completions. Returns (response_text, time_ms).
     Locked: temperature=0.0, max_tokens=512, seed=42."""
 ```
@@ -237,7 +237,7 @@ def generate_local(messages: list[dict], server_url: str = "http://localhost:808
 
 ```python
 def score_ragchecker(query: str, response: str, context: list[str], ground_truth: str,
-                     judge_url: str = "http://localhost:8081") -> dict:
+                     judge_url: str = "http://localhost:5742") -> dict:
     """Returns {"overall_precision": float, "overall_recall": float, "overall_f1": float,
                "claim_recall": float, "context_precision": float,
                "context_utilization": float, "self_knowledge": float,
@@ -253,7 +253,7 @@ def score_ragchecker_frontier(query: str, response: str, context: list[str], gro
     Requires LiteLLM proxy or thin adapter for RAGChecker's OpenAI-compat requirement."""
 ```
 
-Judge model: Command R 35B Q4_K_M running locally on llama.cpp (port 8081). The generation server (port 8080) must be stopped before starting the judge server — they cannot coexist on the V100.
+Judge model: Command R 35B Q4_K_M running locally on llama.cpp (port 5742). The generation server (port 5741) must be stopped before starting the judge server — they cannot coexist on the V100.
 
 **RAGChecker ↔ Anthropic adapter:** For the Sonnet 4.6 validation sample, RAGChecker needs an OpenAI-compatible endpoint. Use LiteLLM proxy (`litellm --model anthropic/claude-sonnet-4-6 --port 4000`) and point RAGChecker's `api_base` at `http://localhost:4000/v1`.
 
@@ -417,7 +417,7 @@ judge:
     quant: "Q4_K_M"
     hf_repo: "bartowski/c4ai-command-r-08-2024-GGUF"
     gguf: "c4ai-command-r-08-2024-Q4_K_M.gguf"
-    port: 8081
+    port: 5742
     ctx_len: 8192
     temperature: 0.0
   
@@ -478,7 +478,7 @@ generation:
   temperature: 0.0
   max_tokens: 512
   seed: 42
-  local_server_port: 8080
+  local_server_port: 5741
 
 scoring:
   framework: ragchecker
@@ -539,7 +539,7 @@ Give Claude Code these as sequential tasks. Each task should produce working, te
 
 ### Task 4: Score
 
-"Create `comprag/score.py` wrapping RAGChecker. Primary judge is local Command R 35B Q4_K_M on llama.cpp (port 8081). `judge_mode` parameter selects between `local` (default, Command R) and `frontier` (Sonnet 4.6 via LiteLLM proxy for the 500-record validation sample). RAGChecker uses OpenAI-compatible endpoint — local judge is already compatible, frontier needs LiteLLM."
+"Create `comprag/score.py` wrapping RAGChecker. Primary judge is local Command R 35B Q4_K_M on llama.cpp (port 5742). `judge_mode` parameter selects between `local` (default, Command R) and `frontier` (Sonnet 4.6 via LiteLLM proxy for the 500-record validation sample). RAGChecker uses OpenAI-compatible endpoint — local judge is already compatible, frontier needs LiteLLM."
 
 ### Task 5: Aggregate
 
@@ -555,7 +555,7 @@ Give Claude Code these as sequential tasks. Each task should produce working, te
 
 ### Task 8: Review
 
-"Run all tests. Read every module end to end. Check that: no frontier generation code exists, no NQ/HaluEval references exist, no manual chat template tokens exist in prompts, Preference_Gap is computed correctly, the JSONL schema matches the spec exactly, judge server port is 8081 not 8080."
+"Run all tests. Read every module end to end. Check that: no frontier generation code exists, no NQ/HaluEval references exist, no manual chat template tokens exist in prompts, Preference_Gap is computed correctly, the JSONL schema matches the spec exactly, judge server port is 5742 not 5741."
 
 ---
 

@@ -253,7 +253,7 @@ def _add_score_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--input", type=str, required=True, help="Path to raw results JSONL")
     p.add_argument("--judge-provider", type=str, default="local",
                    choices=["local", "anthropic"],
-                   help="Judge backend (local = llama-server on localhost:8080)")
+                   help="Judge backend (local = llama-server on localhost:5742)")
     p.add_argument("--judge-model", type=str, default="c4ai-command-r-v01",
                    help="Model ID for the judge")
     p.set_defaults(func=cmd_score)

@@ -106,8 +106,8 @@ def parse_args() -> argparse.Namespace:
         help="Output JSON file path (default: determinism_pilot_result.json).",
     )
     parser.add_argument(
-        "--port", type=int, default=8080,
-        help="Port for llama-server (default: 8080).",
+        "--port", type=int, default=5741,
+        help="Port for llama-server (default: 5741).",
     )
     return parser.parse_args()
 
