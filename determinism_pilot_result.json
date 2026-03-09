@@ -1,0 +1,7 @@
+{
+  "deterministic": true,
+  "model": "Qwen2.5-14B-Instruct-Q4_K_M",
+  "quant": "Q4_K_M",
+  "n_seeds": 10,
+  "n_queries": 50
+}
