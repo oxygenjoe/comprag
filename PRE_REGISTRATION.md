@@ -2,7 +2,7 @@
 
 **Committed before first experimental run.**
 **Date: 2026-03-08**
-**Git commit hash: (filled at commit time)**
+**Git commit hash: 8231386**
 
 ---
 
