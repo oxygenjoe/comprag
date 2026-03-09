@@ -1,9 +1,8 @@
-"""Tests for comprag.generate — message construction and generation calls.
+"""Tests for comprag.generate — message construction and local generation.
 
 Covers:
 - build_messages for all 3 passes (baseline, loose, strict)
 - generate_local with mocked urllib
-- generate_frontier with mocked Anthropic and OpenAI SDKs
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ import pytest
 from comprag.generate import (
     _format_context,
     build_messages,
-    generate_frontier,
     generate_local,
 )
 
@@ -214,156 +212,3 @@ class TestGenerateLocal:
 
         req_obj = mock_urlopen.call_args[0][0]
         assert req_obj.full_url == "http://box:8080/v1/chat/completions"
-
-
-# ---------------------------------------------------------------------------
-# generate_frontier — Anthropic path (mocked SDK)
-# ---------------------------------------------------------------------------
-
-
-class TestGenerateFrontierAnthropic:
-    @patch("comprag.generate._get_api_key", return_value="sk-test-key")
-    @patch("comprag.generate.anthropic.Anthropic")
-    def test_returns_text_and_time(
-        self, mock_anthropic_cls: MagicMock, mock_key: MagicMock,
-    ) -> None:
-        mock_client = MagicMock()
-        mock_anthropic_cls.return_value = mock_client
-        mock_resp = MagicMock()
-        mock_resp.content = [MagicMock(text="anthropic answer")]
-        mock_resp.model = "claude-sonnet-4-20250514"
-        mock_client.messages.create.return_value = mock_resp
-
-        text, time_ms, response_model = generate_frontier(
-            [{"role": "user", "content": "q"}], "anthropic", "claude-sonnet-4-20250514",
-        )
-        assert text == "anthropic answer"
-        assert isinstance(time_ms, int)
-        assert response_model == "claude-sonnet-4-20250514"
-
-    @patch("comprag.generate._get_api_key", return_value="sk-test-key")
-    @patch("comprag.generate.anthropic.Anthropic")
-    def test_system_extracted_from_messages(
-        self, mock_anthropic_cls: MagicMock, mock_key: MagicMock,
-    ) -> None:
-        mock_client = MagicMock()
-        mock_anthropic_cls.return_value = mock_client
-        mock_resp = MagicMock()
-        mock_resp.content = [MagicMock(text="ok")]
-        mock_client.messages.create.return_value = mock_resp
-
-        messages = [
-            {"role": "system", "content": "be strict"},
-            {"role": "user", "content": "q"},
-        ]
-        generate_frontier(messages, "anthropic", "claude-sonnet-4-20250514")
-
-        create_kwargs = mock_client.messages.create.call_args
-        # system should be extracted to a kwarg, not in messages list
-        assert create_kwargs.kwargs.get("system") == "be strict" or \
-               create_kwargs[1].get("system") == "be strict"
-        # The messages passed should NOT contain a system role
-        passed_msgs = (
-            create_kwargs.kwargs.get("messages") or create_kwargs[1].get("messages")
-        )
-        assert all(m["role"] != "system" for m in passed_msgs)
-
-    @patch("comprag.generate._get_api_key", return_value="sk-test-key")
-    @patch("comprag.generate.anthropic.Anthropic")
-    def test_no_seed_param(
-        self, mock_anthropic_cls: MagicMock, mock_key: MagicMock,
-    ) -> None:
-        mock_client = MagicMock()
-        mock_anthropic_cls.return_value = mock_client
-        mock_resp = MagicMock()
-        mock_resp.content = [MagicMock(text="ok")]
-        mock_client.messages.create.return_value = mock_resp
-
-        generate_frontier(
-            [{"role": "user", "content": "q"}], "anthropic", "claude-sonnet-4-20250514",
-        )
-        create_kwargs = mock_client.messages.create.call_args
-        all_kwargs = {**dict(zip(
-            mock_client.messages.create.call_args.args,
-            range(100),
-        ))}
-        # seed should NOT be passed to anthropic
-        kw = create_kwargs.kwargs if create_kwargs.kwargs else create_kwargs[1]
-        assert "seed" not in kw
-
-
-# ---------------------------------------------------------------------------
-# generate_frontier — OpenAI-compat path (mocked SDK)
-# ---------------------------------------------------------------------------
-
-
-class TestGenerateFrontierOpenAI:
-    @patch("comprag.generate._get_api_key", return_value="sk-test-key")
-    @patch("comprag.generate.openai.OpenAI")
-    def test_returns_text_and_time(
-        self, mock_openai_cls: MagicMock, mock_key: MagicMock,
-    ) -> None:
-        mock_client = MagicMock()
-        mock_openai_cls.return_value = mock_client
-        mock_resp = MagicMock()
-        mock_resp.choices = [MagicMock(message=MagicMock(content="openai answer"))]
-        mock_resp.model = "gpt-4o"
-        mock_client.chat.completions.create.return_value = mock_resp
-
-        text, time_ms, response_model = generate_frontier(
-            [{"role": "user", "content": "q"}], "openai", "gpt-4o",
-        )
-        assert text == "openai answer"
-        assert isinstance(time_ms, int)
-        assert response_model == "gpt-4o"
-
-    @patch("comprag.generate._get_api_key", return_value="sk-test-key")
-    @patch("comprag.generate.openai.OpenAI")
-    def test_messages_passed_as_is(
-        self, mock_openai_cls: MagicMock, mock_key: MagicMock,
-    ) -> None:
-        mock_client = MagicMock()
-        mock_openai_cls.return_value = mock_client
-        mock_resp = MagicMock()
-        mock_resp.choices = [MagicMock(message=MagicMock(content="ok"))]
-        mock_client.chat.completions.create.return_value = mock_resp
-
-        messages = [
-            {"role": "system", "content": "sys"},
-            {"role": "user", "content": "q"},
-        ]
-        generate_frontier(messages, "openai", "gpt-4o")
-
-        create_kwargs = mock_client.chat.completions.create.call_args
-        kw = create_kwargs.kwargs if create_kwargs.kwargs else create_kwargs[1]
-        # Messages should be passed as-is (system message stays in the list)
-        assert kw["messages"] == messages
-
-    @patch("comprag.generate._get_api_key", return_value="sk-test-key")
-    @patch("comprag.generate.openai.OpenAI")
-    def test_seed_included(
-        self, mock_openai_cls: MagicMock, mock_key: MagicMock,
-    ) -> None:
-        mock_client = MagicMock()
-        mock_openai_cls.return_value = mock_client
-        mock_resp = MagicMock()
-        mock_resp.choices = [MagicMock(message=MagicMock(content="ok"))]
-        mock_client.chat.completions.create.return_value = mock_resp
-
-        generate_frontier(
-            [{"role": "user", "content": "q"}], "openai", "gpt-4o", seed=99,
-        )
-        create_kwargs = mock_client.chat.completions.create.call_args
-        kw = create_kwargs.kwargs if create_kwargs.kwargs else create_kwargs[1]
-        assert kw["seed"] == 99
-
-
-# ---------------------------------------------------------------------------
-# generate_frontier — unknown provider
-# ---------------------------------------------------------------------------
-
-
-class TestGenerateFrontierErrors:
-    def test_unknown_provider_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown provider"):
-            generate_frontier([{"role": "user", "content": "q"}], "fakeprovider", "m")

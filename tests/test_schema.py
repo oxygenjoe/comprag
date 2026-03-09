@@ -1,7 +1,7 @@
 """Golden-file validation tests for CompRAG JSONL schemas.
 
 Tests the raw per-query JSONL record schema and the aggregated output schema
-as defined in COMPRAG-V8-BUILD-SPEC-1.md (Output Schema section).
+as defined in COMPRAG-V9-BUILD-SPEC.md (Output Schema section).
 """
 
 from __future__ import annotations
@@ -50,16 +50,9 @@ SCORES_RAGCHECKER_FIELDS: dict[str, type | tuple[type, ...]] = {
     "faithfulness": (int, float),
 }
 
-SCORES_RAGAS_FIELDS: dict[str, type | tuple[type, ...]] = {
-    "faithfulness": (int, float),
-    "answer_relevancy": (int, float),
-    "context_precision": (int, float),
-    "context_recall": (int, float),
-}
-
 VALID_SOURCES = {"local", "api"}
 VALID_PASSES = {"pass1_baseline", "pass2_loose", "pass3_strict"}
-VALID_PROVIDERS = {None, "openai", "anthropic", "google", "deepseek", "zhipu"}
+VALID_PROVIDERS = {None, "openai", "anthropic"}
 
 AGGREGATED_RECORD_FIELDS: dict[str, type | tuple[type, ...]] = {
     "model": str,
@@ -124,12 +117,6 @@ def _valid_raw_record() -> dict[str, Any]:
                 "noise_sensitivity_irrelevant": 0.02,
                 "hallucination": 0.05,
                 "faithfulness": 0.93,
-            },
-            "ragas": {
-                "faithfulness": 0.90,
-                "answer_relevancy": 0.88,
-                "context_precision": 0.75,
-                "context_recall": 0.82,
             },
         },
     }
@@ -214,13 +201,6 @@ class TestRawRecordSchema:
         errors += _validate_field_types(rc, SCORES_RAGCHECKER_FIELDS)
         assert errors == [], f"RAGChecker scores invalid: {errors}"
 
-    def test_valid_record_scores_ragas(self) -> None:
-        record = _valid_raw_record()
-        ragas = record["scores"]["ragas"]
-        errors = _validate_field_presence(ragas, SCORES_RAGAS_FIELDS)
-        errors += _validate_field_types(ragas, SCORES_RAGAS_FIELDS)
-        assert errors == [], f"RAGAS scores invalid: {errors}"
-
     def test_valid_source_values(self) -> None:
         record = _valid_raw_record()
         assert record["source"] in VALID_SOURCES
@@ -304,14 +284,6 @@ class TestRawRecordSchema:
         del record["scores"]["ragchecker"]["context_utilization"]
         errors = _validate_field_presence(
             record["scores"]["ragchecker"], SCORES_RAGCHECKER_FIELDS
-        )
-        assert len(errors) > 0
-
-    def test_ragas_wrong_type_fails(self) -> None:
-        record = _valid_raw_record()
-        record["scores"]["ragas"]["faithfulness"] = "high"
-        errors = _validate_field_types(
-            record["scores"]["ragas"], SCORES_RAGAS_FIELDS
         )
         assert len(errors) > 0
 

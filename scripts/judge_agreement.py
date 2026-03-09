@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Judge agreement: frontier-vs-frontier validation across 3 API judges.
+"""Judge agreement: Command R vs Sonnet 4.6 (2-way validation).
 
-Score stratified samples with Claude Opus 4.6, GPT-5.4, and Gemini 3 Flash.
-Compute pairwise Cohen's kappa for all 3 pairs. If a cheaper judge hits
-kappa >= 0.80 against Opus, document it as a validated cost-efficient alternative.
+Score stratified samples with Command R (local) and Claude Sonnet 4.6 (API).
+Compute Cohen's kappa. If kappa >= 0.80, Command R is validated as primary judge.
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ import json
 import logging
 import random
 import sys
-from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +26,12 @@ logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "eval.yaml"
 _MODELS_PATH = Path(__file__).resolve().parent.parent / "config" / "models.yaml"
+
+# 2-way judge panel: local Command R vs Sonnet 4.6 API
+_JUDGES = [
+    {"provider": "local", "model_id": "c4ai-command-r-v01", "label": "commandr-local"},
+    {"provider": "anthropic", "model_id": "claude-sonnet-4-6", "label": "sonnet-api"},
+]
 
 
 def load_config() -> dict[str, Any]:
@@ -93,7 +97,7 @@ def score_with_judge(
     judge_provider: str,
     judge_model: str,
 ) -> dict[str, float]:
-    """Score a single record with the specified frontier judge."""
+    """Score a single record with the specified judge."""
     return score_ragchecker(
         query=record["query"],
         response=record["response"],
@@ -140,32 +144,29 @@ def cohens_kappa(
 
 def _score_all_samples(
     sampled: list[dict[str, Any]],
-    judges: list[dict[str, str]],
     model_roles: dict[str, str],
 ) -> tuple[dict[str, list[dict[str, float]]], list[str]]:
-    """Score every sample with all frontier judges.
+    """Score every sample with both judges.
 
     Returns (judge_scores, strata) where judge_scores maps
-    "provider/model" to a parallel list of score dicts.
+    judge label to a parallel list of score dicts.
     """
     judge_scores: dict[str, list[dict[str, float]]] = {}
-    for judge in judges:
-        key = f"{judge['provider']}/{judge['model_id']}"
-        judge_scores[key] = []
+    for judge in _JUDGES:
+        judge_scores[judge["label"]] = []
 
     strata: list[str] = []
 
     for i, record in enumerate(sampled):
         role = model_roles.get(record["model"], "unknown")
         strata.append(role)
-        for judge in judges:
-            key = f"{judge['provider']}/{judge['model_id']}"
+        for judge in _JUDGES:
             logger.info(
                 "Scoring sample %d/%d with %s (model=%s, role=%s)",
-                i + 1, len(sampled), key, record["model"], role,
+                i + 1, len(sampled), judge["label"], record["model"], role,
             )
             scores = score_with_judge(record, judge["provider"], judge["model_id"])
-            judge_scores[key].append(scores)
+            judge_scores[judge["label"]].append(scores)
 
     return judge_scores, strata
 
@@ -174,45 +175,39 @@ def compute_pairwise_agreement(
     judge_scores: dict[str, list[dict[str, float]]],
     strata: list[str],
     metric: str = "context_utilization",
-) -> list[dict[str, Any]]:
-    """Compute pairwise Cohen's kappa for all judge pairs."""
-    judge_keys = sorted(judge_scores.keys())
-    results: list[dict[str, Any]] = []
+) -> dict[str, Any]:
+    """Compute Cohen's kappa between the two judges."""
+    keys = list(judge_scores.keys())
+    assert len(keys) == 2, f"Expected 2 judges, got {len(keys)}"
+    key_a, key_b = keys
 
-    for key_a, key_b in combinations(judge_keys, 2):
-        a_labels = [_discretize(s[metric]) for s in judge_scores[key_a]]
-        b_labels = [_discretize(s[metric]) for s in judge_scores[key_b]]
+    a_labels = [_discretize(s[metric]) for s in judge_scores[key_a]]
+    b_labels = [_discretize(s[metric]) for s in judge_scores[key_b]]
 
-        overall = cohens_kappa(a_labels, b_labels)
+    overall = cohens_kappa(a_labels, b_labels)
 
-        per_stratum: dict[str, float] = {}
-        for stratum in sorted(set(strata)):
-            idx = [i for i, s in enumerate(strata) if s == stratum]
-            a_sub = [a_labels[i] for i in idx]
-            b_sub = [b_labels[i] for i in idx]
-            per_stratum[stratum] = round(cohens_kappa(a_sub, b_sub), 4)
+    per_stratum: dict[str, float] = {}
+    for stratum in sorted(set(strata)):
+        idx = [i for i, s in enumerate(strata) if s == stratum]
+        a_sub = [a_labels[i] for i in idx]
+        b_sub = [b_labels[i] for i in idx]
+        per_stratum[stratum] = round(cohens_kappa(a_sub, b_sub), 4)
 
-        results.append({
-            "judge_a": key_a,
-            "judge_b": key_b,
-            "overall_kappa": round(overall, 4),
-            "per_stratum_kappa": per_stratum,
-        })
-
-    return results
+    return {
+        "judge_a": key_a,
+        "judge_b": key_b,
+        "overall_kappa": round(overall, 4),
+        "per_stratum_kappa": per_stratum,
+    }
 
 
 def run_agreement(
     input_path: Path,
     output_path: Path,
 ) -> dict[str, Any]:
-    """Run the full frontier-vs-frontier judge agreement pipeline."""
+    """Run the full Command R vs Sonnet 4.6 judge agreement pipeline."""
     config = load_config()
     model_roles = load_model_roles()
-
-    judges = config.get("judges", [])
-    if len(judges) < 2:
-        raise RuntimeError("Need at least 2 judges in eval.yaml judge_validation.judges")
 
     primary_n = config.get("primary_arch_sample", 50)
     secondary_n = config.get("secondary_arch_sample", 50)
@@ -221,27 +216,19 @@ def run_agreement(
     records = load_records(input_path)
     sampled = stratified_sample(records, model_roles, primary_n, secondary_n)
 
-    judge_scores, strata = _score_all_samples(sampled, judges, model_roles)
+    judge_scores, strata = _score_all_samples(sampled, model_roles)
     pairwise = compute_pairwise_agreement(judge_scores, strata)
 
-    # Check which cheaper judges validate against primary (first in list).
-    primary_key = f"{judges[0]['provider']}/{judges[0]['model_id']}"
-    validated_alternatives: list[str] = []
-    for pair in pairwise:
-        if primary_key in (pair["judge_a"], pair["judge_b"]):
-            other = pair["judge_b"] if pair["judge_a"] == primary_key else pair["judge_a"]
-            if pair["overall_kappa"] >= threshold:
-                validated_alternatives.append(other)
+    validated = pairwise["overall_kappa"] >= threshold
 
     result = {
         "sample_size": len(sampled),
         "primary_arch_n": strata.count("primary"),
         "secondary_arch_n": strata.count("secondary"),
         "agreement_threshold_kappa": threshold,
-        "primary_judge": primary_key,
-        "pairwise_results": pairwise,
-        "validated_alternatives": validated_alternatives,
-        "judges": [f"{j['provider']}/{j['model_id']}" for j in judges],
+        "judges": [j["label"] for j in _JUDGES],
+        "pairwise_result": pairwise,
+        "command_r_validated": validated,
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -249,15 +236,11 @@ def run_agreement(
         json.dump(result, f, indent=2)
     logger.info("Wrote agreement results to %s", output_path)
 
-    for pair in pairwise:
-        logger.info(
-            "Kappa %s vs %s: %.4f",
-            pair["judge_a"], pair["judge_b"], pair["overall_kappa"],
-        )
-    if validated_alternatives:
-        logger.info("Validated alternatives (kappa >= %.2f): %s", threshold, validated_alternatives)
-    else:
-        logger.info("No alternatives met kappa >= %.2f threshold", threshold)
+    logger.info(
+        "Kappa %s vs %s: %.4f (threshold=%.2f, validated=%s)",
+        pairwise["judge_a"], pairwise["judge_b"],
+        pairwise["overall_kappa"], threshold, validated,
+    )
 
     return result
 
@@ -265,7 +248,7 @@ def run_agreement(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Judge agreement: frontier-vs-frontier pairwise kappa.",
+        description="Judge agreement: Command R vs Sonnet 4.6 pairwise kappa.",
     )
     parser.add_argument(
         "--input", type=Path, required=True,

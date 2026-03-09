@@ -32,7 +32,7 @@ MODELS = [
 PASSES = ["pass1_baseline", "pass3_strict"]
 DATASET = "rgb"
 SUBSET = "counterfactual_robustness"
-LIMIT = 100
+LIMIT = 500
 PORT = 8080
 
 

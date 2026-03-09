@@ -1,8 +1,8 @@
-"""Evaluation scoring: thin wrapper around RAGChecker with frontier judge routing.
+"""Evaluation scoring: thin wrapper around RAGChecker with local judge.
 
-Judge model: frontier API only (Claude Opus 4.6 primary). The judge_provider
-and judge_model parameters allow switching to other frontier APIs for the
-judge agreement validation check.
+Judge model: Command R 35B Q4_K_M (local, llama-server on port 8081).
+The judge_provider and judge_model parameters allow switching to Anthropic
+API for the judge agreement validation check.
 """
 
 from __future__ import annotations
@@ -13,15 +13,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-import openai as openai_sdk
-from ragas import EvaluationDataset, SingleTurnSample, evaluate
-from ragas.llms import llm_factory
-from ragas.metrics.collections import (
-    AnswerRelevancy,
-    ContextPrecision,
-    ContextRecall,
-    Faithfulness,
-)
 from ragchecker import RAGChecker, RAGResult, RAGResults
 from ragchecker.container import RetrievedDoc
 
@@ -31,8 +22,8 @@ logger = logging.getLogger(__name__)
 _DEFAULT_EVAL_PATH = Path(__file__).resolve().parent.parent / "config" / "eval.yaml"
 
 # Default judge (locked).
-DEFAULT_JUDGE_PROVIDER = "anthropic"
-DEFAULT_JUDGE_MODEL = "claude-opus-4-6"
+DEFAULT_JUDGE_PROVIDER = "local"
+DEFAULT_JUDGE_MODEL = "c4ai-command-r-v01"
 JUDGE_TEMPERATURE = 0.0
 JUDGE_MAX_TOKENS = 1024
 
@@ -42,12 +33,6 @@ TARGET_METRICS = "all_metrics"
 # Provider -> litellm model prefix and API key env var.
 _JUDGE_PROVIDER_CONFIG: dict[str, dict[str, str]] = {
     "anthropic": {"prefix": "anthropic", "env": "ANTHROPIC_API_KEY"},
-    "openai": {"prefix": "openai", "env": "OPENAI_API_KEY"},
-    "google": {"prefix": "gemini", "env": "GOOGLE_API_KEY"},
-    "deepseek": {"prefix": "deepseek", "env": "DEEPSEEK_API_KEY",
-                 "base_url": "https://api.deepseek.com/v1"},
-    "zhipu": {"prefix": "openai", "env": "ZHIPU_API_KEY",
-              "base_url": "https://open.bigmodel.cn/api/paas/v4"},
     "local": {"prefix": "openai", "env": "_LOCAL_JUDGE",
               "base_url": "http://localhost:8080/v1"},
 }
@@ -63,11 +48,11 @@ def _build_checker(
     judge_provider: str = DEFAULT_JUDGE_PROVIDER,
     judge_model: str = DEFAULT_JUDGE_MODEL,
 ) -> RAGChecker:
-    """Build RAGChecker using a frontier API judge.
+    """Build RAGChecker using a judge model.
 
     Args:
-        judge_provider: One of 'anthropic', 'openai', 'google'.
-        judge_model: Model ID for the judge (e.g. 'claude-opus-4-6', 'gpt-5.4').
+        judge_provider: One of 'local', 'anthropic'.
+        judge_model: Model ID for the judge (e.g. 'c4ai-command-r-v01').
     """
     cfg = _JUDGE_PROVIDER_CONFIG.get(judge_provider)
     if not cfg:
@@ -161,8 +146,8 @@ def score_ragchecker(
         hallucination, faithfulness.
 
     Args:
-        judge_provider: 'anthropic' | 'openai' | 'google'. Selects frontier API.
-        judge_model: Model ID for the judge API.
+        judge_provider: 'local' | 'anthropic'. Selects judge backend.
+        judge_model: Model ID for the judge.
     """
     checker = _build_checker(judge_provider, judge_model)
     rag_result = _build_rag_result(query, response, context, ground_truth)
@@ -174,76 +159,3 @@ def score_ragchecker(
     metrics = _extract_target_metrics(results.results[0])
     logger.info("RAGChecker scores: %s", metrics)
     return metrics
-
-
-_RAGAS_METRIC_NAMES = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
-
-
-def _build_ragas_llm(
-    judge_provider: str = DEFAULT_JUDGE_PROVIDER,
-    judge_model: str = DEFAULT_JUDGE_MODEL,
-):
-    """Build a RAGAS-compatible LLM routed by judge provider."""
-    cfg = _JUDGE_PROVIDER_CONFIG.get(judge_provider)
-    if not cfg:
-        raise ValueError(f"Unknown judge_provider '{judge_provider}'")
-
-    api_key = os.environ.get(cfg["env"])
-    if not api_key:
-        raise RuntimeError(f"Missing {cfg['env']} for {judge_provider} judge")
-
-    model_name = f"{cfg['prefix']}/{judge_model}"
-    base_url = cfg.get("base_url")
-    kwargs: dict[str, Any] = {"api_key": api_key}
-    if base_url:
-        kwargs["base_url"] = base_url
-    client = openai_sdk.OpenAI(**kwargs)
-    return llm_factory(model_name, client=client)
-
-
-def _build_ragas_sample(
-    query: str, response: str, context: list[str], ground_truth: str,
-) -> SingleTurnSample:
-    """Construct a RAGAS SingleTurnSample from raw inputs."""
-    return SingleTurnSample(
-        user_input=query,
-        response=response,
-        retrieved_contexts=context,
-        reference=ground_truth,
-    )
-
-
-def score_ragas(
-    query: str,
-    response: str,
-    context: list[str],
-    ground_truth: str,
-    judge_provider: str = DEFAULT_JUDGE_PROVIDER,
-    judge_model: str = DEFAULT_JUDGE_MODEL,
-) -> dict[str, float]:
-    """Score a single RAG result using RAGAS metrics.
-
-    Returns:
-        {"faithfulness": float, "answer_relevancy": float,
-         "context_precision": float, "context_recall": float}
-
-    Args:
-        judge_provider: 'anthropic' | 'openai' | 'google'.
-        judge_model: Model ID for the judge API.
-    """
-    llm = _build_ragas_llm(judge_provider, judge_model)
-    metrics = [
-        Faithfulness(llm=llm),
-        AnswerRelevancy(llm=llm),
-        ContextPrecision(llm=llm),
-        ContextRecall(llm=llm),
-    ]
-    sample = _build_ragas_sample(query, response, context, ground_truth)
-    dataset = EvaluationDataset(samples=[sample])
-
-    logger.info("Running RAGAS evaluation (judge=%s/%s)", judge_provider, judge_model)
-    result = evaluate(dataset=dataset, metrics=metrics)
-
-    scores = {name: float(result.scores[0].get(name, 0.0)) for name in _RAGAS_METRIC_NAMES}
-    logger.info("RAGAS scores: %s", scores)
-    return scores

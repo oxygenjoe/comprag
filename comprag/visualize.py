@@ -1,7 +1,7 @@
 """Matplotlib figures for CompRAG evaluation results.
 
 Reads aggregated JSONL, produces figures showing CU, SK, and Preference_Gap
-vs quantization level with frontier reference lines.
+vs quantization level for local models.
 """
 
 import json
@@ -21,12 +21,6 @@ MODEL_COLORS: dict[str, str] = {
     "llama-3.1-8b-instruct": "#2ca02c", "qwen2.5-7b-instruct": "#d62728",
     "mistral-nemo-12b-instruct": "#9467bd", "gemma-2-9b-instruct": "#8c564b",
     "smollm2-1.7b-instruct": "#7f7f7f",
-}
-
-FRONTIER_STYLES: dict[str, str] = {
-    "gpt-5.4": "#e377c2", "claude-opus-4-6": "#bcbd22",
-    "gemini-3-flash": "#17becf", "deepseek-v3.2": "#aec7e8",
-    "glm-5": "#9edae5",
 }
 
 
@@ -54,28 +48,6 @@ def _filter_local(records: list[dict[str, Any]], pass_prefix: str) -> list[dict[
     return [r for r in records if r["pass"].startswith(pass_prefix)
             and _quant_x(r["quantization"]) is not None
             and r.get("source", "local") == "local"]
-
-
-def _get_frontier(records: list[dict[str, Any]], pass_prefix: str) -> list[dict[str, Any]]:
-    """Get frontier (API) model records for reference lines."""
-    return [r for r in records if r["pass"].startswith(pass_prefix)
-            and r.get("source") == "api"]
-
-
-def _draw_frontier_lines(
-    ax: plt.Axes, frontier: list[dict[str, Any]], metric_key: str,
-) -> None:
-    """Draw horizontal dashed reference lines with shaded CI bands."""
-    seen: set[str] = set()
-    for rec in frontier:
-        model = rec["model"]
-        if model in seen:
-            continue
-        seen.add(model)
-        m = rec["metrics"][metric_key]
-        color = FRONTIER_STYLES.get(model, "#999999")
-        ax.axhline(m["mean"], linestyle="--", color=color, alpha=0.8, label=model)
-        ax.axhspan(m["ci_lo"], m["ci_hi"], color=color, alpha=0.10)
 
 
 def _build_series(
@@ -142,19 +114,17 @@ def _plot_metric_vs_quant(
     records: list[dict[str, Any]], metric_key: str,
     ylabel: str, title: str, output_path: Path,
 ) -> Path:
-    """Shared logic: metric vs quantization with frontier references."""
+    """Shared logic: metric vs quantization for local models."""
     local = _filter_local(records, "pass3")
-    frontier = _get_frontier(records, "pass3")
     series = _build_series(local, metric_key)
     fig, ax = plt.subplots(figsize=(10, 6))
     _plot_series_on_ax(ax, series)
-    _draw_frontier_lines(ax, frontier, metric_key)
     _finish_axes(ax, ylabel, title)
     return _save_fig(fig, output_path)
 
 
 def plot_cu_vs_quant(records: list[dict[str, Any]], output_dir: str) -> Path:
-    """CU vs Quantization: one curve per model, frontier dashed lines."""
+    """CU vs Quantization: one curve per model."""
     return _plot_metric_vs_quant(
         records, "cu", "Context Utilization (CU)",
         "Context Utilization vs Quantization Level",
@@ -162,7 +132,7 @@ def plot_cu_vs_quant(records: list[dict[str, Any]], output_dir: str) -> Path:
 
 
 def plot_sk_vs_quant(records: list[dict[str, Any]], output_dir: str) -> Path:
-    """SK vs Quantization: one curve per model, frontier dashed lines."""
+    """SK vs Quantization: one curve per model."""
     return _plot_metric_vs_quant(
         records, "sk", "Self Knowledge (SK)",
         "Self Knowledge vs Quantization Level",
@@ -195,7 +165,6 @@ def plot_cross_architecture(
 ) -> Path:
     """Paired panels comparing similar-size models on CU vs quantization."""
     local = _filter_local(records, "pass3")
-    frontier = _get_frontier(records, "pass3")
     fig, axes = plt.subplots(1, len(_CROSS_PAIRS), figsize=(14, 6), sharey=True)
     if len(_CROSS_PAIRS) == 1:
         axes = [axes]
@@ -203,7 +172,6 @@ def plot_cross_architecture(
         pair_recs = [r for r in local if r["model"] in (model_a, model_b)]
         series = _build_series(pair_recs, "cu")
         _plot_series_on_ax(ax, series)
-        _draw_frontier_lines(ax, frontier, "cu")
         _finish_axes(ax, "CU", f"{model_a} vs {model_b}")
     return _save_fig(fig, Path(output_dir) / "cross_architecture.png")
 
@@ -216,13 +184,9 @@ def plot_rgb_negative_rejection(
            and _quant_x(r.get("quantization", "")) is not None
            and r.get("source", "local") == "local"
            and r["pass"].startswith("pass3")]
-    frontier = [r for r in records if r.get("subset") == "negative_rejection"
-                and r.get("source") == "api"
-                and r["pass"].startswith("pass3")]
     series = _build_series(neg, "cu")
     fig, ax = plt.subplots(figsize=(10, 6))
     _plot_series_on_ax(ax, series)
-    _draw_frontier_lines(ax, frontier, "cu")
     ax.invert_yaxis()
     _finish_axes(ax, "CU (lower = better)", "Negative Rejection: Gullibility Check")
     return _save_fig(fig, Path(output_dir) / "rgb_negative_rejection.png")
@@ -242,8 +206,6 @@ def plot_smollm2_floor(
     ]:
         series = _build_series(smol, metric)
         _plot_series_on_ax(ax, series, marker="D")
-        frontier = _get_frontier(records, "pass3")
-        _draw_frontier_lines(ax, frontier, metric)
         _finish_axes(ax, label, f"SmolLM2 1.7B — {label} vs Quantization")
     return _save_fig(fig, Path(output_dir) / "smollm2_floor.png")
 

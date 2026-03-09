@@ -71,7 +71,7 @@ def _load_completed_query_ids(output_path: Path) -> set[str]:
 
 
 def cmd_generate(args: argparse.Namespace) -> None:
-    """Run generation: local llama.cpp or frontier API, write raw JSONL."""
+    """Run generation: local llama.cpp, write raw JSONL."""
     logging.basicConfig(level=logging.INFO)
     pass_name: str = getattr(args, "pass")
     queries = _load_dataset_queries(args.dataset, getattr(args, "subset", None))
@@ -90,17 +90,7 @@ def cmd_generate(args: argparse.Namespace) -> None:
         logger.info("All queries already completed in %s", output_path)
         return
 
-    if args.frontier:
-        # Frontier models only run pass2_loose and pass3_strict (frontier.yaml contract)
-        if pass_name not in ("pass2_loose", "pass3_strict"):
-            logger.error(
-                "Frontier models only support pass2_loose and pass3_strict, got '%s'",
-                pass_name,
-            )
-            sys.exit(1)
-        _run_generate_frontier(args, queries, pass_name, run_id, output_path)
-    else:
-        _run_generate_local(args, queries, pass_name, run_id, output_path)
+    _run_generate_local(args, queries, pass_name, run_id, output_path)
     logger.info("Wrote %d records to %s", len(queries), output_path)
 
 
@@ -133,45 +123,6 @@ def _run_generate_local(
             response, time_ms, _model = generate_local(messages)
             record = _build_raw_record(
                 run_id, args.model, args.quant or "unknown", "local", None,
-                args.dataset, rec.get("subset", "default"), pass_name,
-                args.seed, rec, text, context, response, time_ms,
-            )
-            out.write(json.dumps(record) + "\n")
-            out.flush()
-            logger.info("[%d/%d] %s", i + 1, len(queries), text[:60])
-
-
-def _run_generate_frontier(
-    args: argparse.Namespace,
-    queries: list[dict[str, Any]],
-    pass_name: str,
-    run_id: str,
-    output_path: Path,
-) -> None:
-    """Generate responses using frontier API."""
-    from comprag.generate import build_messages, generate_frontier
-    from comprag.retrieve import Retriever
-
-    index_dir = str(PROJECT_ROOT / "index")
-    need_context = pass_name != "pass1_baseline"
-    retriever = Retriever(index_dir=index_dir) if need_context else None
-    subset = getattr(args, "subset", None)
-    collection = f"{args.dataset}_{subset}" if subset else args.dataset
-
-    with open(output_path, "a") as out:
-        for i, rec in enumerate(queries):
-            text = rec.get("query", rec.get("question", ""))
-            context = None
-            if retriever and need_context:
-                rec_subset = rec.get("subset", subset or "default")
-                rec_collection = f"{args.dataset}_{rec_subset}" if rec_subset and rec_subset != "default" else collection
-                context = retriever.query(text=text, collection=rec_collection)
-            messages = build_messages(text, context, pass_name)
-            response, time_ms, _model = generate_frontier(
-                messages, args.provider, args.model, seed=args.seed,
-            )
-            record = _build_raw_record(
-                run_id, args.model, "API", "api", args.provider,
                 args.dataset, rec.get("subset", "default"), pass_name,
                 args.seed, rec, text, context, response, time_ms,
             )
@@ -222,8 +173,8 @@ def cmd_score(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / input_path.name
 
-    judge_provider = getattr(args, "judge_provider", "anthropic")
-    judge_model = getattr(args, "judge_model", "claude-opus-4-6")
+    judge_provider = getattr(args, "judge_provider", "local")
+    judge_model = getattr(args, "judge_model", "c4ai-command-r-v01")
     records: list[dict] = []
     with open(input_path) as f:
         for line in f:
@@ -249,7 +200,7 @@ def cmd_score(args: argparse.Namespace) -> None:
                 judge_provider=judge_provider,
                 judge_model=judge_model,
             )
-            rec["scores"] = {"ragchecker": rc, "ragas": None}
+            rec["scores"] = {"ragchecker": rc}
             out.write(json.dumps(rec) + "\n")
             out.flush()
             logger.info("Scored [%d/%d] %s", i + 1, len(records), rec.get("query_id", "")[:60])
@@ -278,7 +229,7 @@ def cmd_visualize(args: argparse.Namespace) -> None:
 def _add_retrieve_parser(sub: argparse._SubParsersAction) -> None:
     """Add retrieve subcommand."""
     p = sub.add_parser("retrieve", help="Run retrieval on a dataset")
-    p.add_argument("--dataset", type=str, required=True, help="Dataset name (e.g. rgb, nq, halueval)")
+    p.add_argument("--dataset", type=str, required=True, help="Dataset name (e.g. rgb)")
     p.add_argument("--subset", type=str, default=None, help="Dataset subset (e.g. counterfactual)")
     p.set_defaults(func=cmd_retrieve)
 
@@ -292,10 +243,6 @@ def _add_generate_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--pass", type=str, required=True,
                    choices=["pass1_baseline", "pass2_loose", "pass3_strict"],
                    help="Evaluation pass")
-    p.add_argument("--frontier", action="store_true", help="Use frontier API model")
-    p.add_argument("--provider", type=str, default=None,
-                   choices=["openai", "anthropic", "google", "deepseek", "zhipu"],
-                   help="API provider (required with --frontier)")
     p.add_argument("--seed", type=int, default=42, help="Random seed")
     p.set_defaults(func=cmd_generate)
 
@@ -304,10 +251,10 @@ def _add_score_parser(sub: argparse._SubParsersAction) -> None:
     """Add score subcommand."""
     p = sub.add_parser("score", help="Score a results JSONL file")
     p.add_argument("--input", type=str, required=True, help="Path to raw results JSONL")
-    p.add_argument("--judge-provider", type=str, default="anthropic",
-                   choices=["anthropic", "openai", "google", "deepseek", "zhipu", "local"],
-                   help="API provider for judge (local = llama-server on localhost:8080)")
-    p.add_argument("--judge-model", type=str, default="claude-opus-4-6",
+    p.add_argument("--judge-provider", type=str, default="local",
+                   choices=["local", "anthropic"],
+                   help="Judge backend (local = llama-server on localhost:8080)")
+    p.add_argument("--judge-model", type=str, default="c4ai-command-r-v01",
                    help="Model ID for the judge")
     p.set_defaults(func=cmd_score)
 
