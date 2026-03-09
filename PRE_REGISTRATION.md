@@ -1,8 +1,8 @@
 # CompRAG Pre-Registration
 
 **Committed before first experimental run.**
-**Date: 2026-03-08**
-**Git commit hash: 8231386**
+**Date: 2026-03-09**
+**Git commit hash: 11f5a95**
 
 ---
 
@@ -52,7 +52,6 @@ Classification uses data-driven thresholds based on bootstrap CI position relati
 - No claim about adaptive retrieval or retrieval pipeline optimization
 - No causal mechanism claim — observed correlations between quantization level and CU are characterized, not explained
 - No claim that high CU is inherently desirable — the faithfulness/gullibility confound is acknowledged and partially addressed by separate analysis of Negative Rejection queries
-- No claim about API model quantization or internals — frontier models are reference lines, not experimental variables
 
 ## Model Matrix
 
@@ -84,14 +83,6 @@ Classification uses data-driven thresholds based on bootstrap CI position relati
 - **Size effect within architecture:** Qwen 14B vs Qwen 7B
 - **Quantization robustness:** Llama 8B (fragile) vs Qwen 7B (resilient) at near-matched size
 
-## Frontier Reference Line
-
-| Model | API | Model ID |
-|-------|-----|----------|
-| Claude Sonnet 4.6 | Anthropic | `claude-sonnet-4-6` |
-
-Presented as a single horizontal reference line on quantization-faithfulness curves. Not an experimental variable. Evaluated using Pass 2 and Pass 3 only, same queries and retrieval pipeline as local models.
-
 ## Evaluation Protocol
 
 ### Three-Pass Protocol (RGB Counterfactual Subset Only)
@@ -104,7 +95,7 @@ Presented as a single horizontal reference line on quantization-faithfulness cur
 
 - **Primary:** Context Utilization (CU), Self-Knowledge (SK) — via RAGChecker
 - **Derived:** Preference_Gap = Pass3_CU − Pass2_CU
-- **Supporting:** Hallucination, Faithfulness, Precision, Recall, F1 — via RAGChecker + RAGAS
+- **Supporting:** Hallucination, Faithfulness, Precision, Recall, F1 — via RAGChecker
 
 ### Query Counts
 
@@ -117,13 +108,14 @@ Presented as a single horizontal reference line on quantization-faithfulness cur
 
 - Bootstrap resampling: 1000 iterations, 95% confidence intervals
 - Bootstrap computed over queries (not seeds) for local models if determinism pilot confirms bit-identical outputs
-- For frontier API: 3 seeds per configuration; bootstrap reflects both query and seed variance
+- All generation is local — no frontier API generation runs
 
 ## Judge Model
 
 - **Primary (bulk scoring):** Cohere Command R 35B Q4_K_M (local)
-- **Validation (appendix spot-check):** Claude Sonnet 4.6 (Anthropic API), 100-record sample
-- **Judge validation result:** Command R validated against DeepSeek at CU κ=0.853, overall CU+faithfulness κ>0.93 across pass types
+- **Validation (appendix):** Claude Sonnet 4.6 (Anthropic API), 500-record sample stratified across model matrix (run after production scoring)
+- **Validation threshold:** κ ≥ 0.80 required on CU (primary metric). Secondary metrics report raw agreement alongside κ to account for marginal distribution skew.
+- **Development validation:** Command R validated against DeepSeek at CU κ=0.853, overall CU+faithfulness κ>0.93 across pass types
 
 ## Locked Parameters
 
@@ -139,7 +131,6 @@ Presented as a single horizontal reference line on quantization-faithfulness cur
 ## Pinned Versions
 
 - RAGChecker version: 0.1.9
-- RAGAS version: 0.4.3
 - llama.cpp version: b8182 (05728db18)
 - RGB dataset download date: 2026-02-28
 - RGB dataset source URL: https://github.com/chen700564/RGB
