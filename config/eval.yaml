@@ -25,8 +25,7 @@ judge:
     sample_size: 100
 
 scoring:
-  primary: ragchecker
-  baseline: ragas
+  framework: ragchecker
 
 statistics:
   bootstrap_resamples: 1000
@@ -44,15 +43,7 @@ datasets:
   # for the quantization-vs-faithfulness hypothesis.
 
 judge_validation:
-  sample_size: 100
-  primary_arch_sample: 50
-  secondary_arch_sample: 50
-  agreement_threshold_kappa: 0.80
-  judges:  # pairwise kappa computed for all pairs
-    - {provider: "anthropic", model_id: "claude-opus-4-6"}
-    - {provider: "anthropic", model_id: "claude-sonnet-4-6"}
-    - {provider: "anthropic", model_id: "claude-haiku-4-5-20251001"}
-    - {provider: "openai", model_id: "gpt-5.4"}
-    - {provider: "google", model_id: "gemini-3-flash-preview"}
-    - {provider: "deepseek", model_id: "deepseek-chat"}
-    - {provider: "zhipu", model_id: "glm-5"}
+  sample_size: 500  # stratified across model matrix, run after production scoring
+  agreement_threshold_kappa: 0.80  # required for CU; secondary metrics report raw agreement alongside kappa
+  primary_judge: {provider: "local", model: "c4ai-command-r-v01", quant: "Q4_K_M", port: 8081}
+  validation_judge: {provider: "anthropic", model_id: "claude-sonnet-4-6"}
